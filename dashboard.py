@@ -178,6 +178,14 @@ setInterval(refresh, 5000);
 """
 
 
+@app.route("/health")
+def health():
+    # deliberately no auth - this is what an external uptime pinger hits every few
+    # minutes to stop Render's free tier from spinning the service down (and with it,
+    # the trading thread) after 15 minutes of no HTTP traffic
+    return "ok"
+
+
 @app.route("/")
 @requires_auth
 def index():
