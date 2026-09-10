@@ -60,25 +60,36 @@ PAGE = """
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>reversal_bot dashboard</title>
 <style>
+  * { box-sizing: border-box; }
+  html, body { max-width: 100%; overflow-x: hidden; }
   body { font-family: system-ui, sans-serif; background: #0b0e14; color: #e6e6e6; margin: 0; padding: 24px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
   .sub { color: #8a8f98; font-size: 13px; margin-bottom: 24px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .card { background: #161a23; border: 1px solid #262b36; border-radius: 10px; padding: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: #161a23; border: 1px solid #262b36; border-radius: 10px; padding: 16px; min-width: 0; }
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #8a8f98; margin: 0 0 8px; }
-  .big { font-size: 28px; font-weight: 600; }
+  .big { font-size: 26px; font-weight: 600; word-break: break-word; }
   .green { color: #3ecf8e; }
   .red { color: #f0555c; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #262b36; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #262b36; white-space: nowrap; }
   th { color: #8a8f98; font-weight: 500; }
   .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
   .pill.long { background: #123d2c; color: #3ecf8e; }
   .pill.short { background: #3d1618; color: #f0555c; }
   .empty { color: #565d6b; font-style: italic; }
   .badge { display:inline-block; padding: 3px 10px; border-radius: 6px; background:#2a2f3a; font-size:12px; margin-left:8px; }
+  @media (max-width: 600px) {
+    body { padding: 12px; }
+    .grid { grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .card { padding: 12px; }
+    .big { font-size: 20px; }
+    h1 { font-size: 17px; }
+  }
 </style>
 </head>
 <body>
@@ -107,18 +118,18 @@ PAGE = """
   <div class="grid">
     <div class="card">
       <h2>Open positions</h2>
-      <table id="positionsTable"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>uPnL</th></tr></thead><tbody></tbody></table>
+      <div class="table-wrap"><table id="positionsTable"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>uPnL</th></tr></thead><tbody></tbody></table></div>
       <div class="empty" id="positionsEmpty">No open positions</div>
     </div>
     <div class="card">
       <h2>Last scan (movers)</h2>
-      <table id="moversTable"><thead><tr><th>Symbol</th><th>Move %</th></tr></thead><tbody></tbody></table>
+      <div class="table-wrap"><table id="moversTable"><thead><tr><th>Symbol</th><th>Move %</th></tr></thead><tbody></tbody></table></div>
     </div>
   </div>
 
   <div class="card">
     <h2>Trade history (last 20)</h2>
-    <table id="historyTable"><thead><tr><th>Time</th><th>Event</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Stop</th><th>TP</th><th>PnL</th><th>Reason</th></tr></thead><tbody></tbody></table>
+    <div class="table-wrap"><table id="historyTable"><thead><tr><th>Time</th><th>Event</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Stop</th><th>TP</th><th>PnL</th><th>Reason</th></tr></thead><tbody></tbody></table></div>
     <div class="empty" id="historyEmpty">No trades yet</div>
   </div>
 
