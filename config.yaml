@@ -1,0 +1,38 @@
+exchange: binanceusdm
+testnet: true
+
+timeframe: "5m"
+lookback_bars: 100
+
+scan:
+  quote_currency: USDT
+  top_n_movers: 15
+  move_window_minutes: 60
+  min_abs_move_pct: 5.0
+
+signal:
+  rsi_period: 14
+  rsi_overbought: 70
+  rsi_oversold: 30
+  bb_period: 20
+  bb_std: 2.0
+  atr_period: 14
+  orderbook_depth_levels: 50
+  orderbook_price_range_pct: 0.5
+  min_imbalance_ratio: 1.3
+
+risk:
+  # % of equity risked on a single trade if stop-loss is hit
+  risk_per_trade_pct: 1.5
+  # hard ceiling the bot will refuse to exceed regardless of config edits below this line
+  max_risk_per_trade_pct: 5.0
+  stop_atr_mult: 1.5
+  take_profit_r_multiple: 1.5
+  max_leverage: 10
+  max_concurrent_positions: 3
+  # bot stops opening new trades for the day once realized loss hits this % of starting equity
+  daily_loss_limit_pct: 8.0
+
+execution:
+  order_type: market
+  poll_interval_sec: 30
