@@ -36,12 +36,22 @@ class RiskConfig:
     max_leverage: int
     max_concurrent_positions: int
     daily_loss_limit_pct: float
+    # once a position's unrealized profit reaches this many USD, move its stop-loss to
+    # lock in profit_lock_amount_usd instead of waiting for take-profit or the original
+    # stop. 0 (default) disables this.
+    profit_lock_trigger_usd: float = 0.0
+    profit_lock_amount_usd: float = 0.0
 
     def __post_init__(self):
         if self.risk_per_trade_pct > self.max_risk_per_trade_pct:
             raise ValueError(
                 f"risk_per_trade_pct ({self.risk_per_trade_pct}) exceeds "
                 f"max_risk_per_trade_pct ({self.max_risk_per_trade_pct}) - refusing to start"
+            )
+        if self.profit_lock_trigger_usd > 0 and self.profit_lock_amount_usd >= self.profit_lock_trigger_usd:
+            raise ValueError(
+                f"profit_lock_amount_usd ({self.profit_lock_amount_usd}) must be less than "
+                f"profit_lock_trigger_usd ({self.profit_lock_trigger_usd}) - refusing to start"
             )
 
 

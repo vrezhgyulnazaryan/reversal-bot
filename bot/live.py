@@ -46,9 +46,9 @@ class LiveTrader:
     def _available_margin(self) -> float:
         return self.exchange.fetch_balance()["free"].get("USDT", 0.0)
 
-    def _open_position_symbols(self):
+    def _open_positions(self):
         positions = self.exchange.fetch_positions()
-        return {p["symbol"] for p in positions if float(p.get("contracts") or 0) != 0}
+        return [p for p in positions if float(p.get("contracts") or 0) != 0]
 
     def _handle_closed_positions(self, currently_open: set):
         closed = set(self.open_symbols) - currently_open
@@ -100,12 +100,15 @@ class LiveTrader:
             self._write_status(now, self._equity(), [], "daily loss limit reached")
             return
 
-        currently_open = self._open_position_symbols()
+        positions = self._open_positions()
+        currently_open = {p["symbol"] for p in positions}
         self._handle_closed_positions(currently_open)
         self.open_symbols = currently_open
         equity = self._equity()
 
         print(f"[{now}] equity={equity:.2f} USDT open_positions={sorted(self.open_symbols) or 'none'}", flush=True)
+
+        self._check_profit_locks(positions)
 
         if len(self.open_symbols) >= self.cfg.risk.max_concurrent_positions:
             print(f"[{now}] max concurrent positions reached, skipping scan", flush=True)
@@ -132,12 +135,12 @@ class LiveTrader:
             except Exception as e:
                 print(f"[error] {symbol}: {e}", flush=True)
 
-    def _place_reduce_only_stop(self, symbol: str, side: str, qty: float, order_type: str, trigger_price: float):
+    def _place_reduce_only_stop(self, symbol: str, side: str, qty: float, order_type: str, trigger_price: float) -> str:
         # Binance migrated conditional orders (STOP_MARKET/TAKE_PROFIT_MARKET/etc) off
         # POST /fapi/v1/order onto a dedicated Algo Order endpoint (2025-12-09) - the
         # old endpoint now rejects these types with error -4120.
         market = self.exchange.market(symbol)
-        self.exchange.fapiPrivatePostAlgoOrder({
+        response = self.exchange.fapiPrivatePostAlgoOrder({
             "algoType": "CONDITIONAL",
             "symbol": market["id"],
             "side": side.upper(),
@@ -146,6 +149,49 @@ class LiveTrader:
             "quantity": self.exchange.amount_to_precision(symbol, qty),
             "reduceOnly": "true",
         })
+        return str(response.get("algoId"))
+
+    def _check_profit_locks(self, positions: list):
+        trigger = self.cfg.risk.profit_lock_trigger_usd
+        lock_amount = self.cfg.risk.profit_lock_amount_usd
+        if trigger <= 0:
+            return
+
+        positions_by_symbol = {p["symbol"]: p for p in positions}
+        for symbol, meta in self.open_trades.items():
+            if meta.get("profit_locked") or "stop_algo_id" not in meta:
+                continue
+            pos = positions_by_symbol.get(symbol)
+            if pos is None:
+                continue
+            upnl = float(pos.get("unrealizedPnl") or 0)
+            if upnl < trigger:
+                continue
+
+            qty = meta["qty"]
+            entry = meta["entry"]
+            if meta["side"] == "long":
+                new_stop = entry + lock_amount / qty
+            else:
+                new_stop = entry - lock_amount / qty
+
+            try:
+                self.exchange.cancel_order(meta["stop_algo_id"], symbol, params={"trigger": True})
+                opposite = "sell" if meta["side"] == "long" else "buy"
+                new_stop_id = self._place_reduce_only_stop(symbol, opposite, qty, "STOP_MARKET", new_stop)
+                meta["stop_algo_id"] = new_stop_id
+                meta["profit_locked"] = True
+                print(f"[profit-lock] {symbol} uPnL={upnl:.2f} -> moved stop to {new_stop:.6f} "
+                      f"(locking ~{lock_amount} USD)", flush=True)
+                _log_row({
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "event": "profit_lock",
+                    "symbol": symbol,
+                    "side": meta["side"],
+                    "stop": new_stop,
+                })
+            except Exception as e:
+                print(f"[error] profit lock failed for {symbol}: {e}", flush=True)
 
     def _evaluate_symbol(self, symbol: str):
         df = fetch_ohlcv_df(self.exchange, symbol, self.cfg.timeframe, self.cfg.lookback_bars)
@@ -177,7 +223,7 @@ class LiveTrader:
         entry_order = self.exchange.create_order(symbol, self.cfg.execution.order_type, side, sizing.qty)
 
         try:
-            self._place_reduce_only_stop(symbol, opposite, sizing.qty, "STOP_MARKET", sig.stop)
+            stop_algo_id = self._place_reduce_only_stop(symbol, opposite, sizing.qty, "STOP_MARKET", sig.stop)
             self._place_reduce_only_stop(symbol, opposite, sizing.qty, "TAKE_PROFIT_MARKET", sig.take_profit)
         except Exception as e:
             # the position is now open with no protective orders - closing it immediately
@@ -189,7 +235,12 @@ class LiveTrader:
         self.open_symbols.add(symbol)
         entry_time = entry_order.get("timestamp") or int(time.time() * 1000)
         self.open_trades[symbol] = {
-            "entry_time": entry_time, "side": sig.side, "entry": sig.entry,
+            "entry_time": entry_time,
+            "side": sig.side,
+            "entry": sig.entry,
+            "qty": sizing.qty,
+            "stop_algo_id": stop_algo_id,
+            "profit_locked": False,
         }
         _log_row({
             "time": datetime.now(timezone.utc).isoformat(),

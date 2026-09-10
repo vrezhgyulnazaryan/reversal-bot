@@ -32,6 +32,10 @@ risk:
   max_concurrent_positions: 3
   # bot stops opening new trades for the day once realized loss hits this % of starting equity
   daily_loss_limit_pct: 8.0
+  # once a position's unrealized profit reaches this many USD, move its stop-loss to
+  # lock in profit_lock_amount_usd rather than waiting for take-profit or the original stop
+  profit_lock_trigger_usd: 25
+  profit_lock_amount_usd: 20
 
 execution:
   order_type: market
