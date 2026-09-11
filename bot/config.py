@@ -12,6 +12,9 @@ class ScanConfig:
     top_n_movers: int
     move_window_minutes: int
     min_abs_move_pct: float
+    # skip symbols with less than this much 24h quote volume - avoids the thinnest,
+    # most easily-manipulated listings. 0 disables the filter.
+    min_quote_volume_usd: float = 0.0
 
 
 @dataclass
@@ -51,6 +54,14 @@ class RiskConfig:
     # signal always has room to enter - leverage is increased toward max_leverage first
     # to make room before the position size is ever reduced
     margin_reserve_pct: float = 15.0
+    # skip a new entry if its recent price-return correlation with any already-open
+    # position is at or above this (avoids stacking the same risk under different
+    # tickers). 0 disables the check.
+    max_correlation_with_open: float = 0.0
+    # skip a new entry if the symbol's funding rate is this costly against the
+    # intended side (positive funding costs longs, negative funding costs shorts).
+    # 0 disables the check.
+    max_adverse_funding_rate: float = 0.0
 
     def __post_init__(self):
         if self.risk_per_trade_pct > self.max_risk_per_trade_pct:

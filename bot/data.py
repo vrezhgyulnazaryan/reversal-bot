@@ -9,7 +9,10 @@ def fetch_ohlcv_df(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: 
     return df
 
 
-def scan_movers(exchange: ccxt.Exchange, quote_currency: str, top_n: int, min_abs_move_pct: float):
+def scan_movers(
+    exchange: ccxt.Exchange, quote_currency: str, top_n: int, min_abs_move_pct: float,
+    min_quote_volume_usd: float = 0.0,
+):
     """Rank USDT-M perpetual symbols by absolute 24h % change.
 
     Uses the exchange's 24h ticker stats as a cheap proxy for "moved a lot recently" -
@@ -20,6 +23,8 @@ def scan_movers(exchange: ccxt.Exchange, quote_currency: str, top_n: int, min_ab
     for symbol, t in tickers.items():
         market = exchange.markets.get(symbol)
         if not market or not market.get("swap") or market.get("quote") != quote_currency:
+            continue
+        if min_quote_volume_usd > 0 and float(t.get("quoteVolume") or 0) < min_quote_volume_usd:
             continue
         pct = t.get("percentage")
         if pct is None:

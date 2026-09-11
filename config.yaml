@@ -9,6 +9,11 @@ scan:
   top_n_movers: 15
   move_window_minutes: 60
   min_abs_move_pct: 5.0
+  # skip symbols this thin on 24h volume - avoids the most easily-manipulated listings.
+  # NOTE: Binance Demo Trading's volume figures look unrealistic (a random meme coin
+  # showing billions in 24h volume) so this threshold is a best-guess for real markets,
+  # not something validated against our demo data.
+  min_quote_volume_usd: 20000000
 
 signal:
   rsi_period: 14
@@ -37,6 +42,12 @@ risk:
   # room to enter - leverage is raised toward max_leverage first to make room before
   # a position's size is ever reduced to fit
   margin_reserve_pct: 15.0
+  # skip a new entry if its recent price-return correlation with an already-open
+  # position is at or above this - avoids stacking the same risk under different tickers
+  max_correlation_with_open: 0.75
+  # skip a new entry if funding rate is this costly against the intended side
+  # (0.0004 = 0.04% per 8h, roughly 4x the BTC/ETH baseline of 0.01%)
+  max_adverse_funding_rate: 0.0004
   max_concurrent_positions: 3
   # bot stops opening new trades for the day once realized loss hits this % of starting equity
   daily_loss_limit_pct: 8.0

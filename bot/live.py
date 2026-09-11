@@ -66,6 +66,62 @@ class LiveTrader:
                 **({"side": meta["side"], "entry": meta["entry"]} if meta else {}),
             })
 
+    def _adopt_untracked_positions(self, positions: list):
+        """A position already open when this process started (or that survived a
+        Render redeploy) isn't in self.open_trades - trailing-stop/profit-lock would
+        silently never engage for it, since that logic only looks at tracked trades.
+        Reconstruct enough metadata from the exchange to adopt it; if it genuinely has
+        no stop-loss order at all, place a fallback one immediately instead of leaving
+        it naked."""
+        for p in positions:
+            symbol = p["symbol"]
+            if symbol in self.open_trades:
+                continue
+            side = p.get("side")
+            qty = abs(float(p.get("contracts") or 0))
+            entry = float(p.get("entryPrice") or 0)
+            if not side or qty <= 0 or entry <= 0:
+                continue
+
+            try:
+                market_id = self.exchange.market(symbol)["id"]
+                algo_orders = [
+                    o for o in self.exchange.fapiPrivateGetOpenAlgoOrders() if o.get("symbol") == market_id
+                ]
+            except Exception as e:
+                print(f"[warn] could not fetch algo orders while adopting {symbol}: {e}", flush=True)
+                continue
+
+            stop_order = next((o for o in algo_orders if o.get("orderType") == "STOP_MARKET"), None)
+
+            if stop_order is None:
+                mark = float(p.get("markPrice") or 0) or entry
+                pct = self.cfg.risk.max_stop_pct or 5.0
+                fallback_stop = mark * (1 - pct / 100) if side == "long" else mark * (1 + pct / 100)
+                try:
+                    opposite = "sell" if side == "long" else "buy"
+                    stop_algo_id = self._place_reduce_only_stop(symbol, opposite, qty, "STOP_MARKET", fallback_stop)
+                    current_stop = fallback_stop
+                    print(f"[adopt] {symbol} had NO stop-loss - placed fallback at {fallback_stop:.6f}", flush=True)
+                except Exception as e:
+                    print(f"[error] could not place fallback stop for naked position {symbol}: {e}", flush=True)
+                    continue
+            else:
+                stop_algo_id = str(stop_order.get("algoId"))
+                current_stop = float(stop_order.get("triggerPrice"))
+
+            self.open_trades[symbol] = {
+                "entry_time": None,
+                "side": side,
+                "entry": entry,
+                "qty": qty,
+                "stop_algo_id": stop_algo_id,
+                "current_stop": current_stop,
+                "trailing_active": False,
+            }
+            print(f"[adopt] now tracking pre-existing position {symbol} side={side} "
+                  f"entry={entry} stop={current_stop}", flush=True)
+
     def _sweep_orphaned_algo_orders(self, positions: list):
         # When a position closes via one bracket order (stop or take-profit) triggering,
         # the *other* one is left sitting open (they aren't a real OCO pair on this
@@ -128,6 +184,7 @@ class LiveTrader:
 
         print(f"[{now}] equity={equity:.2f} USDT open_positions={sorted(self.open_symbols) or 'none'}", flush=True)
 
+        self._adopt_untracked_positions(positions)
         self._sweep_orphaned_algo_orders(positions)
 
         self._check_trailing_stops(positions)
@@ -142,6 +199,7 @@ class LiveTrader:
             self.cfg.scan.quote_currency,
             self.cfg.scan.top_n_movers,
             self.cfg.scan.min_abs_move_pct,
+            self.cfg.scan.min_quote_volume_usd,
         )
         print(f"[{now}] scanned {len(movers)} movers: "
               f"{[(s, round(p, 2)) for s, p in movers[:10]]}", flush=True)
@@ -254,6 +312,53 @@ class LiveTrader:
                 "stop": candidate_stop,
             })
 
+    def _too_correlated_with_open(self, symbol: str, df) -> bool:
+        """Reject a new entry that would just be stacking the same risk under a
+        different ticker - e.g. several similarly-moving meme coins at once defeats
+        the point of max_concurrent_positions diversification."""
+        threshold = self.cfg.risk.max_correlation_with_open
+        if threshold <= 0 or not self.open_symbols:
+            return False
+        candidate_returns = df["close"].pct_change().dropna()
+        for open_symbol in self.open_symbols:
+            try:
+                open_df = fetch_ohlcv_df(self.exchange, open_symbol, self.cfg.timeframe, len(df))
+            except Exception as e:
+                print(f"[warn] could not fetch {open_symbol} for correlation check: {e}", flush=True)
+                continue
+            open_returns = open_df["close"].pct_change().dropna()
+            n = min(len(candidate_returns), len(open_returns))
+            if n < 10:
+                continue
+            corr = candidate_returns.tail(n).reset_index(drop=True).corr(
+                open_returns.tail(n).reset_index(drop=True)
+            )
+            if corr is not None and abs(corr) >= threshold:
+                print(f"[skip] {symbol} correlation {corr:.2f} with open {open_symbol} "
+                      f">= {threshold}, skipping entry", flush=True)
+                return True
+        return False
+
+    def _funding_rate_blocks_entry(self, symbol: str, side: str) -> bool:
+        threshold = self.cfg.risk.max_adverse_funding_rate
+        if threshold <= 0:
+            return False
+        try:
+            fr = self.exchange.fetch_funding_rate(symbol).get("fundingRate")
+        except Exception as e:
+            print(f"[warn] could not fetch funding rate for {symbol}: {e}", flush=True)
+            return False
+        if fr is None:
+            return False
+        # positive funding costs longs (they pay shorts); negative funding costs shorts
+        if side == "long" and fr > threshold:
+            print(f"[skip] {symbol} funding rate {fr:.5f} too costly for long (> {threshold})", flush=True)
+            return True
+        if side == "short" and fr < -threshold:
+            print(f"[skip] {symbol} funding rate {fr:.5f} too costly for short (< -{threshold})", flush=True)
+            return True
+        return False
+
     def _evaluate_symbol(self, symbol: str):
         df = fetch_ohlcv_df(self.exchange, symbol, self.cfg.timeframe, self.cfg.lookback_bars)
         imbalance = fetch_orderbook_imbalance(
@@ -267,6 +372,11 @@ class LiveTrader:
             self.cfg.risk.max_stop_pct,
         )
         if sig is None:
+            return
+
+        if self._too_correlated_with_open(symbol, df):
+            return
+        if self._funding_rate_blocks_entry(symbol, sig.side):
             return
 
         equity = self._equity()

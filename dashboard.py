@@ -336,7 +336,7 @@ PAGE = """
           </div>
           <div><div class="label">Win rate</div><div class="sub" id="winRateSub">-</div></div>
         </div>
-        <div class="stat"><div class="label">Realized P&amp;L</div><div class="value" id="totalPnl">-</div></div>
+        <div class="stat"><div class="label">Realized P&amp;L</div><div class="value" id="totalPnl">-</div><div class="sub" id="totalPnlSub"></div></div>
         <div class="stat"><div class="label">Today</div><div class="value" id="todayPnl">-</div></div>
       </div>
 
@@ -687,6 +687,8 @@ async function refresh() {
   const pnlEl = document.getElementById('totalPnl');
   pnlEl.textContent = (data.stats.total_pnl >= 0 ? '+' : '') + fmtNum(data.stats.total_pnl, 2) + ' USDT';
   pnlEl.className = 'value ' + (data.stats.total_pnl >= 0 ? 'green' : 'red');
+  document.getElementById('totalPnlSub').textContent =
+    'net ' + (data.stats.net_pnl >= 0 ? '+' : '') + fmtNum(data.stats.net_pnl, 2) + ' after fees';
 
   const todayEl = document.getElementById('todayPnl');
   todayEl.textContent = (data.stats.today_pnl >= 0 ? '+' : '') + fmtNum(data.stats.today_pnl, 2) + ' USDT';
@@ -778,22 +780,35 @@ def index():
     return render_template_string(PAGE)
 
 
-def fetch_exchange_closed_trades(limit=200):
-    """Realized PnL per closed trade, sourced from the exchange itself rather than the
-    local trades_log.csv. Render's free tier disk isn't guaranteed to survive a
-    redeploy, which was silently wiping the trade log and its PnL/history - the
-    exchange's own income record persists regardless of what happens to this process."""
+def fetch_exchange_closed_trades(limit=400):
+    """Realized PnL per closed trade plus total fees paid, sourced from the exchange
+    itself rather than the local trades_log.csv. Render's free tier disk isn't
+    guaranteed to survive a redeploy, which was silently wiping the trade log and its
+    PnL/history - the exchange's own income record persists regardless of what happens
+    to this process.
+
+    One unfiltered income fetch, bucketed client-side by incomeType: REALIZED_PNL
+    entries become trade rows (what "pnl" means everywhere else in the UI - matches
+    the take-profit/stop-loss level that triggered), COMMISSION + FUNDING_FEE are
+    summed separately into fees_total so trade PnL isn't silently blended with fees.
+    """
     try:
-        income = exchange.fapiPrivateGetIncome({"incomeType": "REALIZED_PNL", "limit": limit})
+        income = exchange.fapiPrivateGetIncome({"limit": limit})
     except Exception as e:
         print(f"[warn] could not fetch income history: {e}", flush=True)
-        return []
+        return [], 0.0
 
-    income.sort(key=lambda x: int(x["time"]))
+    fees_total = sum(
+        float(item["income"]) for item in income
+        if item.get("incomeType") in ("COMMISSION", "FUNDING_FEE")
+    )
+
+    pnl_income = [item for item in income if item.get("incomeType") == "REALIZED_PNL"]
+    pnl_income.sort(key=lambda x: int(x["time"]))
     market_by_id = {m["id"]: m["symbol"] for m in exchange.markets.values()}
 
     grouped = []
-    for item in income:
+    for item in pnl_income:
         t = int(item["time"])
         pnl = float(item["income"])
         sid = item["symbol"]
@@ -815,7 +830,7 @@ def fetch_exchange_closed_trades(limit=200):
             "pnl": round(g["pnl"], 4),
             "reason": "",
         })
-    return rows
+    return rows, round(fees_total, 4)
 
 
 @app.route("/api/status")
@@ -858,17 +873,20 @@ def api_status():
         with open(LOG_PATH, newline="") as f:
             local_rows = [r for r in csv.DictReader(f) if r.get("event") in ("entry", "trail_stop")]
 
-    exit_rows = fetch_exchange_closed_trades()
+    exit_rows, fees_total = fetch_exchange_closed_trades()
     history = sorted(local_rows + exit_rows, key=lambda r: r["time"])
 
     closed_pnls = [r["pnl"] for r in exit_rows]
     today = datetime.now(timezone.utc).date().isoformat()
     today_pnl = sum(r["pnl"] for r in exit_rows if r["time"][:10] == today)
+    total_pnl = sum(closed_pnls)
     stats = {
         "closed": len(closed_pnls),
         "wins": len([p for p in closed_pnls if p > 0]),
-        "total_pnl": sum(closed_pnls),
+        "total_pnl": total_pnl,
         "today_pnl": today_pnl,
+        "fees_total": fees_total,
+        "net_pnl": round(total_pnl + fees_total, 4),
     }
 
     by_day = defaultdict(float)
