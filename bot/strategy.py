@@ -15,14 +15,20 @@ class Signal:
     reason: str
 
 
-def _levels(entry: float, side: str, atr_val: float, mean_ref: float, cfg: SignalConfig, stop_atr_mult: float, tp_r_mult: float):
+def _levels(
+    entry: float, side: str, atr_val: float, mean_ref: float, cfg: SignalConfig,
+    stop_atr_mult: float, tp_r_mult: float, max_stop_pct: float,
+):
+    max_risk = entry * (max_stop_pct / 100) if max_stop_pct > 0 else float("inf")
     if side == "long":
         stop = entry - stop_atr_mult * atr_val
-        risk = entry - stop
+        risk = min(entry - stop, max_risk)
+        stop = entry - risk
         take_profit = max(mean_ref, entry + tp_r_mult * risk)
     else:
         stop = entry + stop_atr_mult * atr_val
-        risk = stop - entry
+        risk = min(stop - entry, max_risk)
+        stop = entry + risk
         take_profit = min(mean_ref, entry - tp_r_mult * risk)
     return stop, take_profit
 
@@ -33,6 +39,7 @@ def compute_signal(
     stop_atr_mult: float,
     tp_r_mult: float,
     orderbook_imbalance: Optional[float] = None,
+    max_stop_pct: float = 0.0,
 ) -> Optional[Signal]:
     """Fade-the-extreme reversal signal.
 
@@ -61,7 +68,7 @@ def compute_signal(
             pass
         else:
             entry = close.iloc[last]
-            stop, tp = _levels(entry, "long", a.iloc[last], mid.iloc[last], cfg, stop_atr_mult, tp_r_mult)
+            stop, tp = _levels(entry, "long", a.iloc[last], mid.iloc[last], cfg, stop_atr_mult, tp_r_mult, max_stop_pct)
             if stop < entry:
                 return Signal("long", entry, stop, tp, "oversold rejection off lower band")
 
@@ -73,7 +80,7 @@ def compute_signal(
             pass
         else:
             entry = close.iloc[last]
-            stop, tp = _levels(entry, "short", a.iloc[last], mid.iloc[last], cfg, stop_atr_mult, tp_r_mult)
+            stop, tp = _levels(entry, "short", a.iloc[last], mid.iloc[last], cfg, stop_atr_mult, tp_r_mult, max_stop_pct)
             if stop > entry:
                 return Signal("short", entry, stop, tp, "overbought rejection off upper band")
 

@@ -106,7 +106,8 @@ def run_backtest(symbol_dfs: Dict[str, pd.DataFrame], cfg: Config, starting_equi
                 if len(window) < warmup:
                     continue
                 sig = compute_signal(
-                    window, cfg.signal, cfg.risk.stop_atr_mult, cfg.risk.take_profit_r_multiple, orderbook_imbalance=None
+                    window, cfg.signal, cfg.risk.stop_atr_mult, cfg.risk.take_profit_r_multiple,
+                    orderbook_imbalance=None, max_stop_pct=cfg.risk.max_stop_pct,
                 )
                 if sig is None:
                     continue

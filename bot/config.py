@@ -41,12 +41,21 @@ class RiskConfig:
     # stop. 0 (default) disables this.
     profit_lock_trigger_usd: float = 0.0
     profit_lock_amount_usd: float = 0.0
+    # every trade uses at least this leverage (never below it, still capped at max_leverage)
+    min_leverage: int = 1
+    # stop-loss is never placed further than this % away from entry, even if the
+    # ATR-based distance would be wider (0 disables the cap)
+    max_stop_pct: float = 0.0
 
     def __post_init__(self):
         if self.risk_per_trade_pct > self.max_risk_per_trade_pct:
             raise ValueError(
                 f"risk_per_trade_pct ({self.risk_per_trade_pct}) exceeds "
                 f"max_risk_per_trade_pct ({self.max_risk_per_trade_pct}) - refusing to start"
+            )
+        if self.min_leverage > self.max_leverage:
+            raise ValueError(
+                f"min_leverage ({self.min_leverage}) exceeds max_leverage ({self.max_leverage}) - refusing to start"
             )
         if self.profit_lock_trigger_usd > 0 and self.profit_lock_amount_usd >= self.profit_lock_trigger_usd:
             raise ValueError(

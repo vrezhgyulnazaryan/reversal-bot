@@ -244,7 +244,8 @@ class LiveTrader:
             self.cfg.signal.orderbook_price_range_pct,
         )
         sig = compute_signal(
-            df, self.cfg.signal, self.cfg.risk.stop_atr_mult, self.cfg.risk.take_profit_r_multiple, imbalance
+            df, self.cfg.signal, self.cfg.risk.stop_atr_mult, self.cfg.risk.take_profit_r_multiple, imbalance,
+            self.cfg.risk.max_stop_pct,
         )
         if sig is None:
             return
@@ -258,6 +259,10 @@ class LiveTrader:
         print(f"[signal] {symbol} {sig.side} entry={sig.entry:.6f} stop={sig.stop:.6f} tp={sig.take_profit:.6f} "
               f"qty={sizing.qty:.6f} lev={sizing.leverage}x reason={sig.reason}", flush=True)
 
+        try:
+            self.exchange.set_margin_mode("cross", symbol)
+        except Exception:
+            pass  # already cross, or exchange doesn't allow changing it mid-position - harmless either way
         self.exchange.set_leverage(sizing.leverage, symbol)
         side = "buy" if sig.side == "long" else "sell"
         opposite = "sell" if sig.side == "long" else "buy"

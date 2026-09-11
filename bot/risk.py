@@ -30,7 +30,7 @@ def position_size(
     notional = qty * entry
 
     required_leverage = max(1, round(notional / equity))
-    leverage = min(required_leverage, cfg.max_leverage)
+    leverage = min(max(required_leverage, cfg.min_leverage), cfg.max_leverage)
 
     max_notional_by_equity = equity * cfg.max_leverage
     # leave a small buffer below the exchange's actual free margin for fees/slippage

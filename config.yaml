@@ -29,6 +29,10 @@ risk:
   stop_atr_mult: 1.5
   take_profit_r_multiple: 1.5
   max_leverage: 10
+  # every trade uses at least this leverage, capped at max_leverage above
+  min_leverage: 5
+  # stop-loss is never placed further than this % away from entry (tighter is fine)
+  max_stop_pct: 10.0
   max_concurrent_positions: 3
   # bot stops opening new trades for the day once realized loss hits this % of starting equity
   daily_loss_limit_pct: 8.0
