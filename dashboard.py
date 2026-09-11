@@ -102,7 +102,7 @@ PAGE = """
     --sidebar-w: 216px;
   }
   * { box-sizing: border-box; }
-  html, body { max-width: 100%; overflow-x: hidden; }
+  html, body { max-width: 100%; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     background: var(--bg); color: var(--text); margin: 0;
@@ -291,13 +291,13 @@ PAGE = """
   tr.clickable { cursor: pointer; }
   .moverrow.clickable { cursor: pointer; border-radius: 8px; }
   .moverrow.clickable:hover, tr.clickable:hover { background: rgba(255,255,255,.03); }
-  .obladder { font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  .obladder { font-variant-numeric: tabular-nums; font-size: 12px; }
   .obmid {
     display: flex; align-items: center; justify-content: center; gap: 8px;
-    padding: 9px 0; font-size: 15px; font-weight: 750; color: var(--text);
-    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 2px 0;
+    padding: 6px 0; font-size: 14px; font-weight: 750; color: var(--text);
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 1px 0;
   }
-  .obrow { position: relative; display: flex; justify-content: space-between; padding: 4px 10px; border-radius: 5px; margin-bottom: 1px; overflow: hidden; }
+  .obrow { position: relative; display: flex; justify-content: space-between; padding: 2.5px 10px; border-radius: 5px; margin-bottom: 1px; overflow: hidden; }
   .obrow .obbar { position: absolute; top: 0; bottom: 0; right: 0; z-index: 0; opacity: .16; }
   .obrow.ask .obbar { background: var(--red); }
   .obrow.bid .obbar { background: var(--green); }
@@ -325,6 +325,31 @@ PAGE = """
   .watchrow .progress-fill.long { background: linear-gradient(90deg, #10b981, var(--green)); }
   .watchrow .progress-fill.short { background: linear-gradient(90deg, #e11d48, var(--red)); }
   .watchrow .progress-label { font-size: 11px; color: var(--faint); font-weight: 650; width: 60px; text-align: right; flex-shrink: 0; }
+
+  /* ---------- order-book walls grid ---------- */
+  .wallsgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; padding-bottom: 10px; }
+  .wallcard {
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px;
+    cursor: pointer; transition: border-color .12s; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+  }
+  .wallcard:hover { border-color: rgba(45,212,167,.3); }
+  .wallcard .head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .wallcard .head .sym { font-weight: 700; font-size: 13px; }
+  .wallcard .head .price { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .wallcard .row { display: flex; justify-content: space-between; font-size: 11.5px; padding: 3px 0; }
+  .wallcard .row .k { color: var(--faint); }
+  .wallcard .row .v { font-variant-numeric: tabular-nums; font-weight: 650; }
+
+  /* ---------- history feed (card list, not a dash-heavy table) ---------- */
+  .histlist { display: flex; flex-direction: column; gap: 7px; padding-bottom: 10px; }
+  .histrow { display: flex; align-items: center; gap: 10px; background: var(--bg-soft); border: 1px solid var(--border);
+    border-radius: 12px; padding: 9px 13px; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+  .histrow .left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .histrow .sym { font-weight: 700; font-size: 13.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .histrow .meta { font-size: 11px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .histrow .right { text-align: right; flex-shrink: 0; }
+  .histrow .pnl { font-weight: 750; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .histrow .time { font-size: 10.5px; color: var(--faint); margin-top: 1px; }
 
   .page { display: none; }
   .page.active { display: block; }
@@ -475,14 +500,12 @@ PAGE = """
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>Order-book walls (summary)</h2><span class="count">large resting orders, top movers - click a row to open its ladder</span></div>
-        <div class="table-wrap">
-          <table id="wallsTable"><thead><tr><th>Coin</th><th>Price</th><th>Support (bid wall)</th><th>Resistance (ask wall)</th></tr></thead><tbody></tbody></table>
-        </div>
+        <div class="panel-head"><h2>Order-book walls (summary)</h2><span class="count">large resting orders, top movers - click a card to open its ladder</span></div>
+        <div class="wallsgrid" id="wallsGrid"></div>
         <div class="empty" id="wallsEmpty" style="display:none">__ICO_INBOX__ No significant walls detected right now</div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="obScanPanel">
         <div class="panel-head"><h2><span class="pill strategy ob">Strategy 2</span> Order-book scanner</h2><span class="count" id="obScanCountLabel"></span></div>
         <div class="obscan-desc">Quiet, liquid coins that haven't made a big move — a separate universe from the movers above. Watches for a strong order-book imbalance that holds for several polls in a row before it counts as a signal.</div>
         <div class="watchlist" id="obWatchList"></div>
@@ -495,9 +518,7 @@ PAGE = """
     <section id="page-history" class="page">
       <h1 class="pagetitle">Trade History</h1>
       <div class="panel">
-        <div class="table-wrap">
-          <table id="historyTableFull"><thead><tr><th>Time</th><th>Event</th><th>Coin</th><th>Side</th><th>Entry</th><th>Stop</th><th>TP</th><th>PnL</th><th>Reason</th></tr></thead><tbody></tbody></table>
-        </div>
+        <div class="histlist" id="historyListFull"></div>
         <div class="empty" id="historyEmptyFull" style="display:none">__ICO_FILE__ No trades yet</div>
       </div>
     </section>
@@ -606,21 +627,23 @@ function renderMovers(container, movers) {
   }
 }
 
-function renderWalls(tbody, walls) {
-  tbody.innerHTML = '';
+function renderWalls(container, walls) {
+  container.innerHTML = '';
+  const fmtWall = (wallPrice, price) => {
+    if (wallPrice === null || wallPrice === undefined) return '<span class="muted">-</span>';
+    const distPct = ((wallPrice - price) / price * 100);
+    const cls = distPct >= 0 ? 'green' : 'red';
+    return `${fmtNum(wallPrice)} <span class="${cls}">(${distPct >= 0 ? '+' : ''}${distPct.toFixed(1)}%)</span>`;
+  };
   for (const w of walls) {
-    const tr = document.createElement('tr');
-    tr.className = 'clickable';
-    tr.dataset.symbol = w.symbol;
-    const fmtWall = (wallPrice) => {
-      if (wallPrice === null || wallPrice === undefined) return '<span class="muted">-</span>';
-      const distPct = ((wallPrice - w.price) / w.price * 100);
-      const cls = distPct >= 0 ? 'green' : 'red';
-      return `${fmtNum(wallPrice)} <span class="${cls}">(${distPct >= 0 ? '+' : ''}${distPct.toFixed(1)}%)</span>`;
-    };
-    tr.innerHTML = `<td class="coin">${avatarHtml(w.symbol)}${coinName(w.symbol)}</td>` +
-      `<td>${fmtNum(w.price)}</td><td>${fmtWall(w.bid_wall)}</td><td>${fmtWall(w.ask_wall)}</td>`;
-    tbody.appendChild(tr);
+    const card = document.createElement('div');
+    card.className = 'wallcard';
+    card.dataset.symbol = w.symbol;
+    card.innerHTML = `
+      <div class="head">${avatarHtml(w.symbol)}<span class="sym">${coinName(w.symbol)}</span><span class="price">${fmtNum(w.price)}</span></div>
+      <div class="row"><span class="k">Support</span><span class="v">${fmtWall(w.bid_wall, w.price)}</span></div>
+      <div class="row"><span class="k">Resistance</span><span class="v">${fmtWall(w.ask_wall, w.price)}</span></div>`;
+    container.appendChild(card);
   }
 }
 
@@ -679,23 +702,42 @@ document.addEventListener('click', (e) => {
 
 const EVENT_ICONS = { entry: '↗', exit: '↘', trail_stop: '🔒' };
 
-function renderHistoryFull(tbody, rows) {
-  tbody.innerHTML = '';
+// exit rows from the exchange only ever carry symbol/time/pnl - side/entry/stop/tp/
+// reason only show up if this process was still running (and tracking that entry)
+// when the position closed. Rather than a table full of "-" for what's usually
+// missing, only the fields that actually have data get built into the row at all.
+function renderHistoryFull(container, rows) {
+  container.innerHTML = '';
   for (const h of rows) {
-    const tr = document.createElement('tr');
-    const pnlClass = h.pnl ? (parseFloat(h.pnl) >= 0 ? 'green' : 'red') : '';
+    const row = document.createElement('div');
+    row.className = 'histrow';
+    const pnlClass = h.pnl ? (parseFloat(h.pnl) >= 0 ? 'green' : 'red') : 'muted';
     const pnlText = h.pnl ? (parseFloat(h.pnl) >= 0 ? '+' : '') + fmtNum(h.pnl, 2) : '-';
-    tr.innerHTML = `
-      <td class="time">${timeAgo(h.time)}</td>
-      <td><span class="pill ${h.event}">${EVENT_ICONS[h.event] || ''} ${h.event}</span></td>
-      <td class="coin">${avatarHtml(h.symbol)}${coinName(h.symbol)}</td>
-      <td>${h.side ? `<span class="pill ${h.side}">${h.side}</span>` : '-'}</td>
-      <td>${fmtNum(h.entry)}</td>
-      <td>${fmtNum(h.stop)}</td>
-      <td>${fmtNum(h.take_profit)}</td>
-      <td class="${pnlClass}">${pnlText}</td>
-      <td class="reason" title="${(h.reason || '').replace(/"/g, '&quot;')}">${strategyPill(h.strategy)} ${h.reason || '-'}</td>`;
-    tbody.appendChild(tr);
+
+    const metaParts = [];
+    if (h.entry) metaParts.push(`${fmtNum(h.entry)} entry`);
+    if (h.stop) metaParts.push(`${fmtNum(h.stop)} stop`);
+    if (h.take_profit) metaParts.push(`${fmtNum(h.take_profit)} tp`);
+    if (h.reason) metaParts.push(h.reason);
+    const meta = metaParts.length ? metaParts.join(' · ') : 'closed on the exchange - no local entry data for this one';
+
+    row.innerHTML = `
+      <div class="left">
+        ${avatarHtml(h.symbol)}
+        <div style="min-width:0">
+          <div class="sym">${coinName(h.symbol)}
+            <span class="pill ${h.event}">${EVENT_ICONS[h.event] || ''} ${h.event}</span>
+            ${h.side ? `<span class="pill ${h.side}">${h.side}</span>` : ''}
+            ${strategyPill(h.strategy)}
+          </div>
+          <div class="meta" title="${meta.replace(/"/g, '&quot;')}">${meta}</div>
+        </div>
+      </div>
+      <div class="right">
+        <div class="pnl ${pnlClass}">${pnlText}</div>
+        <div class="time">${timeAgo(h.time)}</div>
+      </div>`;
+    container.appendChild(row);
   }
 }
 
@@ -921,17 +963,21 @@ async function refresh() {
 
   // order-book walls
   const walls = data.walls || [];
-  renderWalls(document.querySelector('#wallsTable tbody'), walls);
+  renderWalls(document.getElementById('wallsGrid'), walls);
   document.getElementById('wallsEmpty').style.display = walls.length ? 'none' : 'block';
-  document.querySelector('#wallsTable').parentElement.style.display = walls.length ? 'block' : 'none';
+  document.getElementById('wallsGrid').style.display = walls.length ? 'grid' : 'none';
 
-  // strategy 2 (order-book imbalance) scanner visibility
-  const obScan = data.orderbook_scan || { universe: [], watching: [] };
-  renderObWatchlist(
-    document.getElementById('obWatchList'), document.getElementById('obWatchEmpty'),
-    obScan.watching || [], document.getElementById('obUniverseTags'), obScan.universe || [],
-    document.getElementById('obScanCountLabel')
-  );
+  // strategy 2 (order-book imbalance) - hide the whole panel when it's not running,
+  // instead of showing an eternally-empty "scanning..." placeholder
+  const obScan = data.orderbook_scan || { enabled: false, universe: [], watching: [] };
+  document.getElementById('obScanPanel').style.display = obScan.enabled ? 'block' : 'none';
+  if (obScan.enabled) {
+    renderObWatchlist(
+      document.getElementById('obWatchList'), document.getElementById('obWatchEmpty'),
+      obScan.watching || [], document.getElementById('obUniverseTags'), obScan.universe || [],
+      document.getElementById('obScanCountLabel')
+    );
+  }
 
   // live order-book ladder for whichever coin is selected (default to the top mover)
   if (!selectedObSymbol && data.movers.length) selectedObSymbol = data.movers[0][0];
@@ -940,7 +986,7 @@ async function refresh() {
   // history: overview preview (compact, 6 rows) + full page
   const histDesc = data.history.slice().reverse();
   renderHistoryPreview(document.querySelector('#historyTablePreview tbody'), histDesc);
-  renderHistoryFull(document.querySelector('#historyTableFull tbody'), histDesc);
+  renderHistoryFull(document.getElementById('historyListFull'), histDesc);
   document.getElementById('historyEmptyPreview').style.display = data.history.length ? 'none' : 'block';
   document.getElementById('historyEmptyFull').style.display = data.history.length ? 'none' : 'block';
 }
@@ -1223,7 +1269,7 @@ def api_orderbook():
     wall_mult = cfg.signal.wall_multiplier or 5.0
     min_wall_usd = cfg.signal.min_wall_usd or 5000.0
 
-    def annotate(levels, n=18):
+    def annotate(levels, n=12):
         out = []
         for price, qty in levels[:n]:
             is_wall = median_qty > 0 and qty >= median_qty * wall_mult and qty * price >= min_wall_usd
