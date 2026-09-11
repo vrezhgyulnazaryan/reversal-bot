@@ -17,8 +17,8 @@ scan:
 
 signal:
   rsi_period: 14
-  rsi_overbought: 70
-  rsi_oversold: 30
+  rsi_overbought: 75
+  rsi_oversold: 25
   bb_period: 20
   bb_std: 2.0
   atr_period: 14
