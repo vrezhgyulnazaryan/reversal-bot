@@ -18,14 +18,20 @@ app = Flask(__name__)
 _base_cfg = Config.load("config.yaml")
 
 
-def _build_account(name: str, testnet: bool, api_key: str, api_secret: str) -> dict:
+def _build_account(name: str, testnet: bool, api_key: str, api_secret: str, always_scan_override=None) -> dict:
     """One trading account (demo or live) - its own exchange connection, its own
     on-disk state files, completely independent of the other account. If the keys
     for it aren't set, it's simply left unconfigured rather than failing startup -
-    the dashboard shows a plain "not configured" state for that account instead."""
+    the dashboard shows a plain "not configured" state for that account instead.
+
+    always_scan_override replaces scan.always_scan_symbols for just this account -
+    used to keep BTC/ETH/SOL out of demo's trading list (per-account divergence from
+    the shared config.yaml) without touching what live trades."""
     if not api_key or not api_secret:
         return {"name": name, "configured": False, "reason": "API key/secret not set"}
     cfg = dataclasses.replace(_base_cfg, testnet=testnet, api_key=api_key, api_secret=api_secret)
+    if always_scan_override is not None:
+        cfg = dataclasses.replace(cfg, scan=dataclasses.replace(cfg.scan, always_scan_symbols=always_scan_override))
     try:
         exchange = build_exchange(cfg)
     except Exception as e:
@@ -47,7 +53,13 @@ def _build_account(name: str, testnet: bool, api_key: str, api_secret: str) -> d
 # up if BINANCE_API_KEY_LIVE/BINANCE_API_SECRET_LIVE are actually set - until then it
 # just shows as unconfigured, same as any other missing account.
 ACCOUNTS = {
-    "demo": _build_account("demo", True, os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", "")),
+    # BTC/ETH/SOL dropped back out of demo's always-scan list per explicit request
+    # 2026-09-11 - only BNB stays force-scanned there. Live keeps the full list from
+    # config.yaml untouched.
+    "demo": _build_account(
+        "demo", True, os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", ""),
+        always_scan_override=["BNB/USDT:USDT"],
+    ),
     "live": _build_account("live", False, os.getenv("BINANCE_API_KEY_LIVE", ""), os.getenv("BINANCE_API_SECRET_LIVE", "")),
 }
 
