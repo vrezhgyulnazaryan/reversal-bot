@@ -77,7 +77,11 @@ risk:
 
 execution:
   order_type: market
-  poll_interval_sec: 20
+  # raised from 20s after running two accounts (demo + live) concurrently tripped a
+  # Binance IP rate-limit ban (418, ~6h) - each poll cycle costs real API weight, and
+  # two bot instances on the same poll interval roughly doubled the request rate from
+  # this IP. Doesn't meaningfully affect the strategy itself (it trades off 5m candles).
+  poll_interval_sec: 45
   # reverted: the main (mean-reversion) strategy enters at market like it always did.
   # order-book-based entries are meant to be their own separate approach, not a
   # modification bolted onto this strategy's execution.

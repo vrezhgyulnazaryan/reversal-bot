@@ -208,7 +208,7 @@ class LiveTrader:
         except Exception:
             pass
 
-    def _scan_walls_for_display(self, movers: list, top_n: int = 6) -> list:
+    def _scan_walls_for_display(self, movers: list, top_n: int = 3) -> list:
         """Order-book walls for the top movers, purely for the dashboard to show
         "where's the accumulation" - not tied to any specific trade signal, just a
         general +/-5% look around current price. Capped to top_n movers since each
@@ -671,5 +671,12 @@ class LiveTrader:
 
     def run_forever(self):
         while True:
-            self.step()
+            try:
+                self.step()
+            except Exception as e:
+                # a transient failure (network blip, exchange rate-limit ban, etc.)
+                # used to kill this thread silently and permanently - it would just
+                # stop trading/monitoring until the next redeploy, with no crash log
+                # anyone would think to look for. Log it and keep the loop alive instead.
+                print(f"[error:{self.account}] step() failed: {e}", flush=True)
             time.sleep(self.cfg.execution.poll_interval_sec)

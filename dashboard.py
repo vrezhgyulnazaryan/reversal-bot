@@ -3,6 +3,7 @@ import dataclasses
 import json
 import os
 import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -108,6 +109,10 @@ def start_bot_thread_once():
         t = threading.Thread(target=trader.run_forever, daemon=True, name=f"reversal-bot-{name}")
         t.start()
         print(f"[dashboard] {name} bot trading thread started", flush=True)
+        # stagger multiple accounts' poll cycles instead of starting them in lockstep -
+        # spreads their API request bursts apart instead of doubling them up on the
+        # same instant every cycle (part of what caused the rate-limit ban)
+        time.sleep(8)
 
 
 # Off by default locally (start_bot.bat runs the bot as its own process there).
