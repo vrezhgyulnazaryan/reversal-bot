@@ -103,8 +103,13 @@ class OrderbookStrategyConfig:
     top_n_candidates: int = 20
     min_quote_volume_usd: float = 20000000.0
     # stay out of the mean-reversion strategy's territory - skip anything that's
-    # already moved more than this much in 24h
+    # already moved more than this much in 24h (net open-to-last change)
     max_abs_move_pct: float = 5.0
+    # also skip anything whose 24h high/low band is this wide, even if the net %
+    # change above looks calm - catches a coin that spiked hard and round-tripped
+    # back to roughly where it started (still genuinely volatile, just not "moved").
+    # 0 disables this check.
+    max_24h_range_pct: float = 8.0
     obi_depth_levels: int = 20
     obi_price_range_pct: float = 0.5
     # normalized -1..+1 scale; 0.6 ~= 80% dominance on one side

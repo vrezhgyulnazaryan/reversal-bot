@@ -37,13 +37,19 @@ def scan_movers(
 
 def scan_quiet_coins(
     exchange: ccxt.Exchange, quote_currency: str, exclude_symbols: set, top_n: int,
-    min_quote_volume_usd: float, max_abs_move_pct: float,
+    min_quote_volume_usd: float, max_abs_move_pct: float, max_24h_range_pct: float = 0.0,
 ):
     """The mirror image of scan_movers(): liquid coins that HAVEN'T made a big move
     in the last 24h, ranked by volume. This is the mean-reversion strategy's blind
     spot - it only ever looks at big movers - so the order-book-imbalance strategy
     gets a genuinely separate universe to work with instead of competing for the
     same symbols.
+
+    max_abs_move_pct alone isn't enough: a coin can spike hard and round-trip back to
+    roughly where it started, so the 24h open-to-last % looks calm while the coin was
+    genuinely violent in between (whipsaw risk for a strategy that trades off resting
+    order-book pressure, not a directional read on the move). max_24h_range_pct catches
+    that using the 24h high/low band instead of just net change; 0 disables it.
     """
     tickers = exchange.fetch_tickers()
     candidates = []
@@ -59,6 +65,12 @@ def scan_quiet_coins(
         pct = t.get("percentage")
         if pct is not None and abs(pct) > max_abs_move_pct:
             continue
+        if max_24h_range_pct > 0:
+            high, low, last = t.get("high"), t.get("low"), t.get("last")
+            if high and low and last:
+                range_pct = (float(high) - float(low)) / float(last) * 100
+                if range_pct > max_24h_range_pct:
+                    continue
         candidates.append((symbol, qv))
     candidates.sort(key=lambda x: x[1], reverse=True)
     return [s for s, _ in candidates[:top_n]]

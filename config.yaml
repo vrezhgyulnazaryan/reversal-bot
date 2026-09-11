@@ -87,6 +87,11 @@ orderbook_strategy:
   top_n_candidates: 20
   min_quote_volume_usd: 20000000
   max_abs_move_pct: 5.0
+  # skip a candidate whose 24h high/low band is this wide even if the net % change
+  # above looks calm - catches a coin that spiked hard and round-tripped back to
+  # roughly where it started (e.g. VVV on 2026-09-11: net change was only +3.8% but
+  # the 24h range was ~12%, and the bot chased a long right into that whipsaw)
+  max_24h_range_pct: 8.0
   obi_depth_levels: 20
   obi_price_range_pct: 0.5
   obi_threshold: 0.6

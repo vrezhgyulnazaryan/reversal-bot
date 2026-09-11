@@ -285,6 +285,7 @@ class LiveTrader:
                 top_n=self.cfg.orderbook_strategy.top_n_candidates,
                 min_quote_volume_usd=self.cfg.orderbook_strategy.min_quote_volume_usd,
                 max_abs_move_pct=self.cfg.orderbook_strategy.max_abs_move_pct,
+                max_24h_range_pct=self.cfg.orderbook_strategy.max_24h_range_pct,
             )
 
         self._write_status(now, equity, movers, walls=walls, quiet_universe=quiet_candidates)
