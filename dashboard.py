@@ -155,9 +155,11 @@ async function refresh() {
   document.getElementById('positionsEmpty').style.display = data.positions.length ? 'none' : 'block';
   for (const p of data.positions) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${p.symbol}</td><td><span class="pill ${p.side}">${p.side}</span></td>` +
-      `<td>${p.qty}</td><td>${p.entry}</td><td>${p.mark}</td>` +
-      `<td class="${p.upnl >= 0 ? 'green' : 'red'}">${p.upnl}</td>`;
+    const upnlCell = p.stale
+      ? `<td title="Exchange returned a stale/zero price for this symbol">⚠ stale feed</td>`
+      : `<td class="${p.upnl >= 0 ? 'green' : 'red'}">${p.upnl}</td>`;
+    tr.innerHTML = `<td>${p.symbol}</td><td><span class="pill ${p.side}">${p.side || '?'}</span></td>` +
+      `<td>${p.qty}</td><td>${p.entry}</td><td>${p.mark}</td>` + upnlCell;
     posBody.appendChild(tr);
   }
 
@@ -213,13 +215,18 @@ def api_status():
     for p in exchange.fetch_positions():
         if float(p.get("contracts") or 0) == 0:
             continue
+        # Demo Trading has occasionally returned markPrice=0 for a genuinely open
+        # position (stale/broken feed for that symbol) - the unrealizedPnl computed
+        # off that is garbage, so flag it instead of showing a misleading number.
+        stale = float(p.get("markPrice") or 0) <= 0
         positions.append({
             "symbol": p["symbol"],
             "side": p.get("side"),
             "qty": p.get("contracts"),
             "entry": p.get("entryPrice"),
             "mark": p.get("markPrice"),
-            "upnl": round(float(p.get("unrealizedPnl") or 0), 2),
+            "upnl": None if stale else round(float(p.get("unrealizedPnl") or 0), 2),
+            "stale": stale,
         })
 
     scan_time, movers = None, []

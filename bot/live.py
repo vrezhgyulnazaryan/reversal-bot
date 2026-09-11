@@ -65,6 +65,25 @@ class LiveTrader:
                 **({"side": meta["side"], "entry": meta["entry"]} if meta else {}),
             })
 
+    def _sweep_orphaned_algo_orders(self, positions: list):
+        # When a position closes via one bracket order (stop or take-profit) triggering,
+        # the *other* one is left sitting open (they aren't a real OCO pair on this
+        # exchange), and a process restart loses track of open_trades entirely. Left
+        # alone these accumulate and eventually hit Binance's per-symbol
+        # MAX_NUM_ALGO_ORDERS cap, which breaks bracket-order placement on that symbol -
+        # so every cycle, cancel any algo order whose symbol has no open position at all.
+        try:
+            open_market_ids = {self.exchange.market(p["symbol"])["id"] for p in positions}
+            for o in self.exchange.fapiPrivateGetOpenAlgoOrders():
+                if o.get("symbol") not in open_market_ids:
+                    self.exchange.fapiPrivateDeleteAlgoOrder(
+                        {"symbol": o.get("symbol"), "algoId": o.get("algoId")}
+                    )
+                    print(f"[cleanup] cancelled orphaned algo order {o.get('symbol')} "
+                          f"{o.get('orderType')}", flush=True)
+        except Exception as e:
+            print(f"[warn] orphaned algo order sweep failed: {e}", flush=True)
+
     def _realized_pnl_since(self, symbol: str, entry_time) -> float:
         try:
             trades = self.exchange.fetch_my_trades(symbol, limit=20)
@@ -107,6 +126,8 @@ class LiveTrader:
         equity = self._equity()
 
         print(f"[{now}] equity={equity:.2f} USDT open_positions={sorted(self.open_symbols) or 'none'}", flush=True)
+
+        self._sweep_orphaned_algo_orders(positions)
 
         self._check_profit_locks(positions)
 
@@ -164,6 +185,17 @@ class LiveTrader:
             pos = positions_by_symbol.get(symbol)
             if pos is None:
                 continue
+
+            # Demo Trading has occasionally returned markPrice=0/notional=0 for a
+            # genuinely open position (a stale/broken feed for that symbol) - trusting
+            # unrealizedPnl computed off that would be trusting garbage, so skip this
+            # cycle rather than act on it.
+            mark_price = float(pos.get("markPrice") or 0)
+            if mark_price <= 0:
+                print(f"[warn] {symbol} markPrice is {mark_price}, skipping profit-lock check "
+                      f"this cycle (looks like a stale/broken price feed)", flush=True)
+                continue
+
             upnl = float(pos.get("unrealizedPnl") or 0)
             if upnl < trigger:
                 continue
@@ -176,22 +208,32 @@ class LiveTrader:
                 new_stop = entry - lock_amount / qty
 
             try:
-                self.exchange.cancel_order(meta["stop_algo_id"], symbol, params={"trigger": True})
+                # place the new stop BEFORE cancelling the old one - if this fails, the
+                # position is still protected by the original stop instead of sitting
+                # naked until the next cycle
                 opposite = "sell" if meta["side"] == "long" else "buy"
                 new_stop_id = self._place_reduce_only_stop(symbol, opposite, qty, "STOP_MARKET", new_stop)
-                meta["stop_algo_id"] = new_stop_id
-                meta["profit_locked"] = True
-                print(f"[profit-lock] {symbol} uPnL={upnl:.2f} -> moved stop to {new_stop:.6f} "
-                      f"(locking ~{lock_amount} USD)", flush=True)
-                _log_row({
-                    "time": datetime.now(timezone.utc).isoformat(),
-                    "event": "profit_lock",
-                    "symbol": symbol,
-                    "side": meta["side"],
-                    "stop": new_stop,
-                })
             except Exception as e:
-                print(f"[error] profit lock failed for {symbol}: {e}", flush=True)
+                print(f"[error] profit lock failed for {symbol}, original stop left in place: {e}", flush=True)
+                continue
+
+            try:
+                self.exchange.cancel_order(meta["stop_algo_id"], symbol, params={"trigger": True})
+            except Exception as e:
+                print(f"[warn] could not cancel old stop for {symbol} after placing new one "
+                      f"(position now has two stops, which is safe but redundant): {e}", flush=True)
+
+            meta["stop_algo_id"] = new_stop_id
+            meta["profit_locked"] = True
+            print(f"[profit-lock] {symbol} uPnL={upnl:.2f} -> moved stop to {new_stop:.6f} "
+                  f"(locking ~{lock_amount} USD)", flush=True)
+            _log_row({
+                "time": datetime.now(timezone.utc).isoformat(),
+                "event": "profit_lock",
+                "symbol": symbol,
+                "side": meta["side"],
+                "stop": new_stop,
+            })
 
     def _evaluate_symbol(self, symbol: str):
         df = fetch_ohlcv_df(self.exchange, symbol, self.cfg.timeframe, self.cfg.lookback_bars)
