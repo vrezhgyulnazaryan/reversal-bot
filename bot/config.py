@@ -45,6 +45,14 @@ class RiskConfig:
     # ever tightened, never loosened. 0 (default) disables this.
     profit_lock_trigger_usd: float = 0.0
     trail_atr_mult: float = 1.5
+    # trailing distance never exceeds this % of price, even if trail_atr_mult * ATR
+    # would be wider - caps how much profit a sudden volatility spike can give back
+    # on an explosively volatile symbol. 0 disables the cap.
+    trail_max_pct: float = 0.0
+    # once profit reaches trail_tighten_at_multiple x profit_lock_trigger_usd, the
+    # trailing multiplier is halved (tighter buffer) to lock in more as gains grow -
+    # let the trade breathe early, squeeze harder once it's deep in profit
+    trail_tighten_at_multiple: float = 2.0
     # every trade uses at least this leverage (never below it, still capped at max_leverage)
     min_leverage: int = 1
     # stop-loss is never placed further than this % away from entry, even if the

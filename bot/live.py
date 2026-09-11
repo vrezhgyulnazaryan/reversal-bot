@@ -239,7 +239,7 @@ class LiveTrader:
         on a volatile symbol and got stopped out by ordinary noise before the move
         continued toward the original take-profit)."""
         trigger = self.cfg.risk.profit_lock_trigger_usd
-        trail_mult = self.cfg.risk.trail_atr_mult
+        base_trail_mult = self.cfg.risk.trail_atr_mult
         if trigger <= 0:
             return
 
@@ -273,11 +273,24 @@ class LiveTrader:
                 continue
 
             qty = meta["qty"]
+
+            # let it breathe early, squeeze harder once deep in profit
+            trail_mult = base_trail_mult
+            if self.cfg.risk.trail_tighten_at_multiple > 0 and upnl >= trigger * self.cfg.risk.trail_tighten_at_multiple:
+                trail_mult = base_trail_mult / 2
+
+            distance = trail_mult * atr_val
+            if self.cfg.risk.trail_max_pct > 0:
+                # cap the buffer as a % of price - on an explosively volatile symbol,
+                # trail_mult * ATR alone can stay wide enough to give back most of a
+                # move even after "tightening" once
+                distance = min(distance, mark_price * (self.cfg.risk.trail_max_pct / 100))
+
             if meta["side"] == "long":
-                candidate_stop = mark_price - trail_mult * atr_val
+                candidate_stop = mark_price - distance
                 improved = candidate_stop > meta["current_stop"]
             else:
-                candidate_stop = mark_price + trail_mult * atr_val
+                candidate_stop = mark_price + distance
                 improved = candidate_stop < meta["current_stop"]
 
             if not improved:

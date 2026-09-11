@@ -56,6 +56,12 @@ risk:
   # for take-profit or the original stop - re-evaluated every cycle, only ever tightened
   profit_lock_trigger_usd: 25
   trail_atr_mult: 1.5
+  # trailing distance never exceeds this % of price, even on a wildly volatile symbol
+  # where trail_atr_mult * ATR would otherwise stay very wide
+  trail_max_pct: 4.0
+  # once profit reaches 2x the trigger above, the trailing multiplier is halved to
+  # lock in more as gains grow
+  trail_tighten_at_multiple: 2.0
 
 execution:
   order_type: market
