@@ -2,5 +2,8 @@
 __pycache__/
 *.pyc
 status.json
+status_*.json
 trades_log.csv
+trades_log_*.csv
 history_reset_at.json
+history_reset_at_*.json

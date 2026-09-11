@@ -1,4 +1,5 @@
 import csv
+import dataclasses
 import json
 import os
 import threading
@@ -13,22 +14,55 @@ from bot.exchange import build_exchange
 from bot.live import LiveTrader
 
 app = Flask(__name__)
-cfg = Config.load("config.yaml")
-exchange = build_exchange(cfg)
-
-STATUS_PATH = "status.json"
-LOG_PATH = "trades_log.csv"
-RESET_MARKER_PATH = "history_reset_at.json"
+_base_cfg = Config.load("config.yaml")
 
 
-def _history_cutoff() -> str:
+def _build_account(name: str, testnet: bool, api_key: str, api_secret: str) -> dict:
+    """One trading account (demo or live) - its own exchange connection, its own
+    on-disk state files, completely independent of the other account. If the keys
+    for it aren't set, it's simply left unconfigured rather than failing startup -
+    the dashboard shows a plain "not configured" state for that account instead."""
+    if not api_key or not api_secret:
+        return {"name": name, "configured": False, "reason": "API key/secret not set"}
+    cfg = dataclasses.replace(_base_cfg, testnet=testnet, api_key=api_key, api_secret=api_secret)
+    try:
+        exchange = build_exchange(cfg)
+    except Exception as e:
+        return {"name": name, "configured": False, "reason": f"could not connect: {e}"}
+    return {
+        "name": name,
+        "configured": True,
+        "reason": "",
+        "cfg": cfg,
+        "exchange": exchange,
+        "status_path": f"status_{name}.json",
+        "log_path": f"trades_log_{name}.csv",
+        "reset_marker_path": f"history_reset_at_{name}.json",
+    }
+
+
+# two fully independent accounts, switchable from the dashboard: demo (Binance Demo
+# Trading, paper money) and live (real Binance futures, real money). Live only comes
+# up if BINANCE_API_KEY_LIVE/BINANCE_API_SECRET_LIVE are actually set - until then it
+# just shows as unconfigured, same as any other missing account.
+ACCOUNTS = {
+    "demo": _build_account("demo", True, os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", "")),
+    "live": _build_account("live", False, os.getenv("BINANCE_API_KEY_LIVE", ""), os.getenv("BINANCE_API_SECRET_LIVE", "")),
+}
+
+
+def _get_account(name: str):
+    return ACCOUNTS.get(name) or ACCOUNTS["demo"]
+
+
+def _history_cutoff(reset_marker_path: str) -> str:
     """ISO timestamp set by /api/reset-history - history/stats before this point are
     hidden from the dashboard. Doesn't touch the exchange's own records (there's no
     way to erase those, and no need to) - this just draws a line for what the site
     counts as "since we started this test run"."""
-    if os.path.exists(RESET_MARKER_PATH):
+    if os.path.exists(reset_marker_path):
         try:
-            with open(RESET_MARKER_PATH) as f:
+            with open(reset_marker_path) as f:
                 return json.load(f).get("since", "")
         except Exception:
             pass
@@ -52,18 +86,28 @@ def requires_auth(f):
     return wrapped
 
 
-_bot_thread_started = False
+_bot_threads_started = False
 
 
 def start_bot_thread_once():
-    global _bot_thread_started
-    if _bot_thread_started:
+    global _bot_threads_started
+    if _bot_threads_started:
         return
-    _bot_thread_started = True
-    trader = LiveTrader(cfg)
-    t = threading.Thread(target=trader.run_forever, daemon=True, name="reversal-bot")
-    t.start()
-    print("[dashboard] bot trading thread started", flush=True)
+    _bot_threads_started = True
+    for name, acct in ACCOUNTS.items():
+        if not acct["configured"]:
+            print(f"[dashboard] {name} account not configured ({acct['reason']}) - skipping", flush=True)
+            continue
+        # extra, deliberate opt-in for real money beyond just having keys set - mirrors
+        # run_live.py's --i-understand-the-risk gate for the CLI entrypoint
+        if not acct["cfg"].testnet and os.getenv("ENABLE_LIVE_TRADING", "false").lower() != "true":
+            print(f"[dashboard] {name} account has keys but ENABLE_LIVE_TRADING is not 'true' - "
+                  f"refusing to trade real money until that's set explicitly", flush=True)
+            continue
+        trader = LiveTrader(acct["cfg"], account=name)
+        t = threading.Thread(target=trader.run_forever, daemon=True, name=f"reversal-bot-{name}")
+        t.start()
+        print(f"[dashboard] {name} bot trading thread started", flush=True)
 
 
 # Off by default locally (start_bot.bat runs the bot as its own process there).
@@ -152,6 +196,24 @@ PAGE = """
   }
   .modebadge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .06em; color: var(--amber);
     background: rgba(251,191,36,.12); border: 1px solid rgba(251,191,36,.25); border-radius: 6px; padding: 3px 7px; }
+  .modebadge.live { color: var(--red); background: var(--red-soft); border-color: rgba(251,113,133,.35); }
+
+  /* ---------- demo/live account toggle ---------- */
+  .acct-toggle { display: flex; gap: 4px; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+    border-radius: 10px; padding: 3px; margin: 0 6px 18px; }
+  .acct-btn { flex: 1; background: transparent; border: none; color: var(--muted); font-family: inherit;
+    font-size: 11.5px; font-weight: 700; padding: 7px 0; border-radius: 7px; cursor: pointer; transition: background .12s, color .12s; }
+  .acct-btn.active[data-account="demo"] { background: var(--accent-soft); color: var(--accent); }
+  .acct-btn.active[data-account="live"] { background: var(--red-soft); color: var(--red); }
+
+  /* ---------- not-configured state (e.g. live account has no API keys yet) ---------- */
+  main.blocked .page { display: none !important; }
+  .notconfigured-wrap { display: none; padding: 70px 20px; text-align: center; }
+  .notconfigured-wrap.show { display: block; }
+  .notconfigured .ico { font-size: 32px; margin-bottom: 14px; }
+  .notconfigured h2 { font-size: 17px; margin: 0 0 8px; }
+  .notconfigured p { color: var(--muted); font-size: 13px; max-width: 420px; margin: 0 auto; line-height: 1.7; }
+  .notconfigured code { background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 5px; font-size: 12px; }
   .resetbtn {
     display: block; width: 100%; margin-top: 10px; background: transparent; border: 1px solid var(--border);
     color: var(--muted); font-family: inherit; font-size: 11px; font-weight: 650; padding: 7px 0;
@@ -393,6 +455,10 @@ PAGE = """
       <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></div>
       <div class="name">reversal_bot</div>
     </div>
+    <div class="acct-toggle" id="acctToggle">
+      <button class="acct-btn active" data-account="demo">Demo</button>
+      <button class="acct-btn" data-account="live">Live</button>
+    </div>
     <div class="navgroup">
       <button class="navbtn active" data-page="overview"><span class="ic">__IC_HOME__</span>Overview</button>
       <button class="navbtn" data-page="positions"><span class="ic">__IC_POSITIONS__</span>Positions</button>
@@ -407,6 +473,13 @@ PAGE = """
   </aside>
 
   <main>
+    <div class="notconfigured-wrap" id="notConfiguredBanner">
+      <div class="notconfigured">
+        <div class="ico">🔒</div>
+        <h2>This account isn't set up yet</h2>
+        <p id="notConfiguredReason">Add <code>BINANCE_API_KEY_LIVE</code> and <code>BINANCE_API_SECRET_LIVE</code> as environment variables and redeploy.</p>
+      </div>
+    </div>
     <section id="page-overview" class="page active">
       <div class="hero">
         <div class="hero-top">
@@ -534,6 +607,25 @@ PAGE = """
 
 <script>
 function coinName(sym) { return (sym || '').split('/')[0]; }
+
+// ---------- demo/live account switch (persisted per browser via localStorage) ----------
+let currentAccount = 'demo';
+try { currentAccount = localStorage.getItem('rb_account') || 'demo'; } catch (e) {}
+
+function setAccountButtons() {
+  document.querySelectorAll('.acct-btn').forEach(b => b.classList.toggle('active', b.dataset.account === currentAccount));
+}
+setAccountButtons();
+document.querySelectorAll('.acct-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.account === currentAccount) return;
+    currentAccount = btn.dataset.account;
+    try { localStorage.setItem('rb_account', currentAccount); } catch (e) {}
+    setAccountButtons();
+    selectedObSymbol = null;
+    refresh();
+  });
+});
 
 const STRATEGY_LABELS = { mean_reversion: 'Mean Reversion', orderbook_imbalance: 'Order Book', unknown: 'Unknown' };
 function strategyPill(code) {
@@ -681,7 +773,7 @@ async function loadOrderbook(symbol) {
   document.getElementById('obTitle').textContent = coinName(symbol) + ' Order Book';
   document.getElementById('obSubtitle').textContent = 'live';
   try {
-    const res = await fetch('/api/orderbook?symbol=' + encodeURIComponent(symbol));
+    const res = await fetch('/api/orderbook?symbol=' + encodeURIComponent(symbol) + '&account=' + currentAccount);
     const data = await res.json();
     renderOrderbookLadder(data);
   } catch (e) {
@@ -913,14 +1005,32 @@ function renderDailyBars(dailyPnl) {
 async function refresh() {
   let data;
   try {
-    const res = await fetch('/api/status');
+    const res = await fetch('/api/status?account=' + currentAccount);
     data = await res.json();
   } catch (e) {
     document.getElementById('lastUpdate').textContent = 'connection lost';
     return;
   }
 
-  document.getElementById('mode').textContent = data.mode;
+  const main = document.querySelector('main');
+  const banner = document.getElementById('notConfiguredBanner');
+  if (data.configured === false) {
+    main.classList.add('blocked');
+    banner.classList.add('show');
+    document.getElementById('notConfiguredReason').textContent =
+      data.reason || 'Add the API keys for this account as environment variables and redeploy.';
+    const modeEl = document.getElementById('mode');
+    modeEl.textContent = currentAccount === 'live' ? 'LIVE - NOT SET UP' : 'NOT CONFIGURED';
+    modeEl.classList.remove('live');
+    document.getElementById('lastUpdate').textContent = 'not connected';
+    return;
+  }
+  main.classList.remove('blocked');
+  banner.classList.remove('show');
+
+  const modeEl = document.getElementById('mode');
+  modeEl.textContent = data.mode;
+  modeEl.classList.toggle('live', currentAccount === 'live');
   document.getElementById('lastUpdate').textContent = 'updated ' + timeAgo(data.scan_time);
   document.getElementById('equity').textContent = fmtNum(data.equity, 2) + ' USDT';
   document.getElementById('posCount').textContent = data.positions.length;
@@ -991,9 +1101,9 @@ async function refresh() {
   document.getElementById('historyEmptyFull').style.display = data.history.length ? 'none' : 'block';
 }
 document.getElementById('resetHistoryBtn').addEventListener('click', async () => {
-  if (!confirm('Clear stats, equity chart and trade history on the site and start counting from now? This does not touch Binance itself.')) return;
+  if (!confirm(`Clear stats, equity chart and trade history for the ${currentAccount.toUpperCase()} account and start counting from now? This does not touch Binance itself.`)) return;
   try {
-    await fetch('/api/reset-history', { method: 'POST' });
+    await fetch('/api/reset-history?account=' + currentAccount, { method: 'POST' });
     refresh();
   } catch (e) {
     alert('Reset failed - connection error');
@@ -1062,7 +1172,7 @@ def index():
     return render_template_string(PAGE)
 
 
-def fetch_exchange_closed_trades(limit=400, since_iso=""):
+def fetch_exchange_closed_trades(exchange, limit=400, since_iso=""):
     """Realized PnL per closed trade plus total fees paid, sourced from the exchange
     itself rather than the local trades_log.csv. Render's free tier disk isn't
     guaranteed to survive a redeploy, which was silently wiping the trade log and its
@@ -1122,6 +1232,17 @@ def fetch_exchange_closed_trades(limit=400, since_iso=""):
 @app.route("/api/status")
 @requires_auth
 def api_status():
+    account_name = request.args.get("account", "demo")
+    acct = ACCOUNTS.get(account_name)
+    if not acct or not acct["configured"]:
+        return jsonify({
+            "configured": False,
+            "account": account_name,
+            "reason": (acct or {}).get("reason", "unknown account"),
+        })
+    exchange = acct["exchange"]
+    cfg = acct["cfg"]
+
     balance = exchange.fetch_balance()
     equity = balance["total"].get("USDT", 0.0)
 
@@ -1146,8 +1267,8 @@ def api_status():
 
     scan_time, movers, walls, strategy_by_symbol = None, [], [], {}
     orderbook_scan = {"enabled": False, "universe": [], "watching": []}
-    if os.path.exists(STATUS_PATH):
-        with open(STATUS_PATH) as f:
+    if os.path.exists(acct["status_path"]):
+        with open(acct["status_path"]) as f:
             status = json.load(f)
         scan_time = status.get("time")
         movers = status.get("movers", [])
@@ -1158,20 +1279,20 @@ def api_status():
     for p in positions:
         p["strategy"] = strategy_by_symbol.get(p["symbol"], "unknown")
 
-    since_iso = _history_cutoff()
+    since_iso = _history_cutoff(acct["reset_marker_path"])
 
     # entry/trail_stop events only come from the local log (no clean exchange
     # equivalent) - exits come from the exchange's own income record so they survive
     # this process restarting or Render wiping the disk on redeploy
     local_rows = []
-    if os.path.exists(LOG_PATH):
-        with open(LOG_PATH, newline="") as f:
+    if os.path.exists(acct["log_path"]):
+        with open(acct["log_path"], newline="") as f:
             local_rows = [
                 r for r in csv.DictReader(f)
                 if r.get("event") in ("entry", "trail_stop") and (not since_iso or r["time"] >= since_iso)
             ]
 
-    exit_rows, fees_total = fetch_exchange_closed_trades(since_iso=since_iso)
+    exit_rows, fees_total = fetch_exchange_closed_trades(exchange, since_iso=since_iso)
     history = sorted(local_rows + exit_rows, key=lambda r: r["time"])
 
     # the exchange only tells us symbol/time/pnl for a close - side/entry/stop/tp/reason
@@ -1217,7 +1338,9 @@ def api_status():
     ]
 
     return jsonify({
-        "mode": "TESTNET/DEMO" if cfg.testnet else "LIVE",
+        "configured": True,
+        "account": account_name,
+        "mode": "TESTNET/DEMO" if cfg.testnet else "LIVE - REAL FUNDS",
         "equity": equity,
         "positions": positions,
         "daily_pnl": daily_pnl,
@@ -1239,11 +1362,15 @@ def api_reset_history():
     thing as erasing its records, and no need to): the local trades_log.csv is also
     cleared so old entries don't linger for no reason, but even if it weren't, the
     time cutoff alone is enough to hide everything before it."""
+    account_name = request.args.get("account", "demo")
+    acct = ACCOUNTS.get(account_name)
+    if not acct or not acct["configured"]:
+        return jsonify({"ok": False, "reason": (acct or {}).get("reason", "unknown account")}), 400
     now = datetime.now(timezone.utc).isoformat()
-    with open(RESET_MARKER_PATH, "w") as f:
+    with open(acct["reset_marker_path"], "w") as f:
         json.dump({"since": now}, f)
-    if os.path.exists(LOG_PATH):
-        os.remove(LOG_PATH)
+    if os.path.exists(acct["log_path"]):
+        os.remove(acct["log_path"])
     return jsonify({"ok": True, "since": now})
 
 
@@ -1252,6 +1379,12 @@ def api_reset_history():
 def api_orderbook():
     """Live order-book ladder for one symbol - the actual price/size levels, not just
     the wall-detection summary, so it looks and reads like a real order book."""
+    account_name = request.args.get("account", "demo")
+    acct = ACCOUNTS.get(account_name)
+    if not acct or not acct["configured"]:
+        return jsonify({"error": "account not configured"}), 400
+    exchange, cfg = acct["exchange"], acct["cfg"]
+
     symbol = request.args.get("symbol")
     if not symbol:
         return jsonify({"error": "symbol required"}), 400

@@ -13,26 +13,21 @@ from .orderbook_strategy import compute_orderbook_signal
 from .risk import position_size, DailyLossGuard
 from . import indicators as ind
 
-LOG_PATH = "trades_log.csv"
-STATUS_PATH = "status.json"
 LOG_FIELDS = [
     "time", "event", "symbol", "side", "entry", "stop", "take_profit",
     "qty", "leverage", "reason", "order_id", "exit_price", "pnl", "strategy",
 ]
 
 
-def _log_row(row: dict):
-    exists = os.path.exists(LOG_PATH)
-    with open(LOG_PATH, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
-        if not exists:
-            writer.writeheader()
-        writer.writerow({k: row.get(k, "") for k in LOG_FIELDS})
-
-
 class LiveTrader:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, account: str = "demo"):
         self.cfg = cfg
+        # "account" namespaces this instance's on-disk state (status.json/trades_log.csv
+        # equivalents) so a demo-account bot and a real-money bot can run side by side
+        # in the same process without clobbering each other's files
+        self.account = account
+        self.status_path = f"status_{account}.json"
+        self.log_path = f"trades_log_{account}.csv"
         self.exchange = build_exchange(cfg)
         balance = self.exchange.fetch_balance()
         equity = balance["total"].get("USDT", 0.0)
@@ -43,7 +38,15 @@ class LiveTrader:
         self.open_trades = {}  # symbol -> dict(entry metadata) for trades this bot opened
         self.pending_entries = {}  # symbol -> dict(unfilled limit entry order state)
         self.obi_state = {}  # symbol -> dict(order-book-imbalance persistence tracking)
-        print(f"[init] mode={'TESTNET' if cfg.testnet else 'LIVE'} equity={equity:.2f} USDT", flush=True)
+        print(f"[init:{account}] mode={'TESTNET' if cfg.testnet else 'LIVE'} equity={equity:.2f} USDT", flush=True)
+
+    def _log_row(self, row: dict):
+        exists = os.path.exists(self.log_path)
+        with open(self.log_path, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+            if not exists:
+                writer.writeheader()
+            writer.writerow({k: row.get(k, "") for k in LOG_FIELDS})
 
     def _equity(self) -> float:
         return self.exchange.fetch_balance()["total"].get("USDT", 0.0)
@@ -62,7 +65,7 @@ class LiveTrader:
             pnl = self._realized_pnl_since(symbol, meta["entry_time"] if meta else None)
             self.guard.record_trade_pnl(pnl)
             print(f"[closed] {symbol} realized_pnl={pnl:.2f} USDT", flush=True)
-            _log_row({
+            self._log_row({
                 "time": datetime.now(timezone.utc).isoformat(),
                 "event": "exit",
                 "symbol": symbol,
@@ -131,7 +134,7 @@ class LiveTrader:
             # back onto the local entry that opened it) has nothing to match this
             # position's eventual close against, and that row shows permanently blank
             tp_order = next((o for o in algo_orders if o.get("orderType") == "TAKE_PROFIT_MARKET"), None)
-            _log_row({
+            self._log_row({
                 "time": datetime.now(timezone.utc).isoformat(),
                 "event": "entry",
                 "symbol": symbol,
@@ -178,7 +181,7 @@ class LiveTrader:
 
     def _write_status(self, now, equity, movers, note="", walls=None, quiet_universe=None):
         try:
-            with open(STATUS_PATH, "w") as f:
+            with open(self.status_path, "w") as f:
                 json.dump({
                     "time": now,
                     "equity": equity,
@@ -445,7 +448,7 @@ class LiveTrader:
             meta["trailing_active"] = True
             print(f"[trail-stop] {symbol} uPnL={upnl:.2f} -> moved stop to {candidate_stop:.6f} "
                   f"({trail_mult}x ATR behind mark={mark_price:.6f})", flush=True)
-            _log_row({
+            self._log_row({
                 "time": datetime.now(timezone.utc).isoformat(),
                 "event": "trail_stop",
                 "symbol": symbol,
@@ -618,7 +621,7 @@ class LiveTrader:
             "trailing_active": False,
             "strategy": sig.strategy,
         }
-        _log_row({
+        self._log_row({
             "time": datetime.now(timezone.utc).isoformat(),
             "event": "entry",
             "symbol": symbol,

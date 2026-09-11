@@ -12,6 +12,16 @@ services:
         sync: false
       - key: BINANCE_API_SECRET
         sync: false
+      # optional second account, real money - the dashboard's Demo/Live toggle only
+      # lights up "Live" once both of these are set. Leave unset to stay demo-only.
+      - key: BINANCE_API_KEY_LIVE
+        sync: false
+      - key: BINANCE_API_SECRET_LIVE
+        sync: false
+      # deliberate extra opt-in beyond just having live keys set - must be the exact
+      # string "true" for the live-account bot thread to actually start trading
+      - key: ENABLE_LIVE_TRADING
+        sync: false
       - key: DASHBOARD_USER
         sync: false
       - key: DASHBOARD_PASS
