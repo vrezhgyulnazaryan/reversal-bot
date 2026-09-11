@@ -18,6 +18,21 @@ exchange = build_exchange(cfg)
 
 STATUS_PATH = "status.json"
 LOG_PATH = "trades_log.csv"
+RESET_MARKER_PATH = "history_reset_at.json"
+
+
+def _history_cutoff() -> str:
+    """ISO timestamp set by /api/reset-history - history/stats before this point are
+    hidden from the dashboard. Doesn't touch the exchange's own records (there's no
+    way to erase those, and no need to) - this just draws a line for what the site
+    counts as "since we started this test run"."""
+    if os.path.exists(RESET_MARKER_PATH):
+        try:
+            with open(RESET_MARKER_PATH) as f:
+                return json.load(f).get("since", "")
+        except Exception:
+            pass
+    return ""
 
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "")
 DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "")
@@ -137,6 +152,12 @@ PAGE = """
   }
   .modebadge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .06em; color: var(--amber);
     background: rgba(251,191,36,.12); border: 1px solid rgba(251,191,36,.25); border-radius: 6px; padding: 3px 7px; }
+  .resetbtn {
+    display: block; width: 100%; margin-top: 10px; background: transparent; border: 1px solid var(--border);
+    color: var(--muted); font-family: inherit; font-size: 11px; font-weight: 650; padding: 7px 0;
+    border-radius: 8px; cursor: pointer; transition: border-color .12s, color .12s;
+  }
+  .resetbtn:hover { border-color: var(--red); color: var(--red); }
 
   /* ---------- main ---------- */
   main { flex: 1; min-width: 0; padding: 24px 26px 90px; }
@@ -356,6 +377,7 @@ PAGE = """
     <div class="sidebar-foot">
       <div class="live"><span class="dot"></span><span id="lastUpdate">connecting…</span></div>
       <span class="modebadge" id="mode">...</span>
+      <button class="resetbtn" id="resetHistoryBtn" title="Clear stats/history and start counting from now">Reset stats</button>
     </div>
   </aside>
 
@@ -922,6 +944,16 @@ async function refresh() {
   document.getElementById('historyEmptyPreview').style.display = data.history.length ? 'none' : 'block';
   document.getElementById('historyEmptyFull').style.display = data.history.length ? 'none' : 'block';
 }
+document.getElementById('resetHistoryBtn').addEventListener('click', async () => {
+  if (!confirm('Clear stats, equity chart and trade history on the site and start counting from now? This does not touch Binance itself.')) return;
+  try {
+    await fetch('/api/reset-history', { method: 'POST' });
+    refresh();
+  } catch (e) {
+    alert('Reset failed - connection error');
+  }
+});
+
 refresh();
 setInterval(refresh, 5000);
 </script>
@@ -984,7 +1016,7 @@ def index():
     return render_template_string(PAGE)
 
 
-def fetch_exchange_closed_trades(limit=400):
+def fetch_exchange_closed_trades(limit=400, since_iso=""):
     """Realized PnL per closed trade plus total fees paid, sourced from the exchange
     itself rather than the local trades_log.csv. Render's free tier disk isn't
     guaranteed to survive a redeploy, which was silently wiping the trade log and its
@@ -1001,6 +1033,10 @@ def fetch_exchange_closed_trades(limit=400):
     except Exception as e:
         print(f"[warn] could not fetch income history: {e}", flush=True)
         return [], 0.0
+
+    if since_iso:
+        cutoff_ms = int(datetime.fromisoformat(since_iso).timestamp() * 1000)
+        income = [item for item in income if int(item["time"]) >= cutoff_ms]
 
     fees_total = sum(
         float(item["income"]) for item in income
@@ -1076,15 +1112,20 @@ def api_status():
     for p in positions:
         p["strategy"] = strategy_by_symbol.get(p["symbol"], "unknown")
 
+    since_iso = _history_cutoff()
+
     # entry/trail_stop events only come from the local log (no clean exchange
     # equivalent) - exits come from the exchange's own income record so they survive
     # this process restarting or Render wiping the disk on redeploy
     local_rows = []
     if os.path.exists(LOG_PATH):
         with open(LOG_PATH, newline="") as f:
-            local_rows = [r for r in csv.DictReader(f) if r.get("event") in ("entry", "trail_stop")]
+            local_rows = [
+                r for r in csv.DictReader(f)
+                if r.get("event") in ("entry", "trail_stop") and (not since_iso or r["time"] >= since_iso)
+            ]
 
-    exit_rows, fees_total = fetch_exchange_closed_trades()
+    exit_rows, fees_total = fetch_exchange_closed_trades(since_iso=since_iso)
     history = sorted(local_rows + exit_rows, key=lambda r: r["time"])
 
     # the exchange only tells us symbol/time/pnl for a close - side/entry/stop/tp/reason
@@ -1140,7 +1181,24 @@ def api_status():
         "scan_time": scan_time,
         "history": history[-30:],
         "stats": stats,
+        "reset_since": since_iso,
     })
+
+
+@app.route("/api/reset-history", methods=["POST"])
+@requires_auth
+def api_reset_history():
+    """Draws a line under the dashboard's stats/history/equity-chart - everything
+    before this moment stops counting. Doesn't touch the exchange itself (no such
+    thing as erasing its records, and no need to): the local trades_log.csv is also
+    cleared so old entries don't linger for no reason, but even if it weren't, the
+    time cutoff alone is enough to hide everything before it."""
+    now = datetime.now(timezone.utc).isoformat()
+    with open(RESET_MARKER_PATH, "w") as f:
+        json.dump({"since": now}, f)
+    if os.path.exists(LOG_PATH):
+        os.remove(LOG_PATH)
+    return jsonify({"ok": True, "since": now})
 
 
 @app.route("/api/orderbook")

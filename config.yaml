@@ -83,7 +83,11 @@ execution:
 # coins that haven't made a big move yet - a leading signal instead of reacting to
 # a move that's already happened.
 orderbook_strategy:
-  enabled: true
+  # disabled per explicit request 2026-09-11: real trading showed it churning
+  # through many small losing trades (BNB/NEAR/DOGE/LDO etc.) faster than it could
+  # be trusted. Only the mean-reversion strategy (strategy 1) trades now. Code is
+  # left in place, dormant, in case this gets revisited later.
+  enabled: false
   top_n_candidates: 20
   min_quote_volume_usd: 20000000
   max_abs_move_pct: 5.0
