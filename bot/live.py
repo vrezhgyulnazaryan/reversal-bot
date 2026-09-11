@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 from .config import Config
 from .exchange import build_exchange
-from .data import fetch_ohlcv_df, scan_movers, fetch_orderbook_imbalance
-from .strategy import compute_signal
+from .data import fetch_ohlcv_df, scan_movers, fetch_orderbook_imbalance, find_nearest_wall
+from .strategy import compute_signal, Signal
 from .risk import position_size, DailyLossGuard
 from . import indicators as ind
 
@@ -372,6 +372,41 @@ class LiveTrader:
             return True
         return False
 
+    def _refine_stop_with_orderbook(self, symbol: str, sig: Signal) -> Signal:
+        """If there's a real support/resistance wall between entry and the ATR-based
+        stop, use it instead - a stop anchored to actual resting order size is more
+        meaningful than a pure volatility distance, and being tighter, it lets the
+        position size scale up for the same dollar risk. Only ever tightens the stop,
+        never widens it beyond what the ATR/max_stop_pct logic already decided."""
+        if self.cfg.signal.wall_multiplier <= 0:
+            return sig
+        side = "bids" if sig.side == "long" else "asks"
+        try:
+            wall_price = find_nearest_wall(
+                self.exchange, symbol, side, sig.entry, sig.stop,
+                self.cfg.signal.wall_multiplier, self.cfg.signal.min_wall_usd,
+                self.cfg.signal.wall_scan_depth,
+            )
+        except Exception as e:
+            print(f"[warn] wall detection failed for {symbol}: {e}", flush=True)
+            return sig
+        if wall_price is None:
+            return sig
+
+        buffer = wall_price * 0.001  # sit just beyond the wall, not exactly on it
+        if sig.side == "long":
+            new_stop = wall_price - buffer
+            valid = sig.stop < new_stop < sig.entry
+        else:
+            new_stop = wall_price + buffer
+            valid = sig.entry < new_stop < sig.stop
+        if not valid:
+            return sig
+
+        print(f"[wall] {symbol} refined stop {sig.stop:.6f} -> {new_stop:.6f} "
+              f"using order-book wall at {wall_price:.6f}", flush=True)
+        return Signal(sig.side, sig.entry, new_stop, sig.take_profit, sig.reason + " + wall-refined stop")
+
     def _evaluate_symbol(self, symbol: str):
         df = fetch_ohlcv_df(self.exchange, symbol, self.cfg.timeframe, self.cfg.lookback_bars)
         imbalance = fetch_orderbook_imbalance(
@@ -391,6 +426,8 @@ class LiveTrader:
             return
         if self._funding_rate_blocks_entry(symbol, sig.side):
             return
+
+        sig = self._refine_stop_with_orderbook(symbol, sig)
 
         equity = self._equity()
         available_margin = self._available_margin()

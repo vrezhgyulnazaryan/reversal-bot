@@ -25,6 +25,11 @@ signal:
   orderbook_depth_levels: 50
   orderbook_price_range_pct: 0.5
   min_imbalance_ratio: 1.3
+  # a resting order book level counts as a "wall" (real support/resistance) if its
+  # size is at least this many times the local median between entry and the ATR stop
+  wall_multiplier: 5.0
+  min_wall_usd: 5000
+  wall_scan_depth: 500
 
 risk:
   # % of equity risked on a single trade if stop-loss is hit

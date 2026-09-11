@@ -49,3 +49,39 @@ def fetch_orderbook_imbalance(exchange: ccxt.Exchange, symbol: str, depth: int, 
     if ask_vol == 0:
         return float("inf")
     return bid_vol / ask_vol
+
+
+def find_nearest_wall(
+    exchange: ccxt.Exchange, symbol: str, side: str, near_price: float, far_price: float,
+    wall_multiplier: float, min_wall_usd: float, depth: int,
+):
+    """Scan the order book between near_price and far_price for a price level whose
+    resting size stands out from its neighbors (wall_multiplier x the local median)
+    and is worth at least min_wall_usd - a real support/resistance level, more
+    meaningful for a stop-loss than a pure ATR distance.
+
+    side: "bids" to look for support below price (for a long's stop), "asks" for
+    resistance above price (for a short's stop). Returns the wall price closest to
+    near_price (the tightest valid stop), or None if nothing qualifies.
+    """
+    ob = exchange.fetch_order_book(symbol, limit=depth)
+    levels = ob.get(side) or []
+    lo, hi = min(near_price, far_price), max(near_price, far_price)
+    in_range = [(p, q) for p, q in levels if lo <= p <= hi]
+    if len(in_range) < 5:
+        return None
+
+    qtys = sorted(q for _, q in in_range)
+    median_qty = qtys[len(qtys) // 2]
+    if median_qty <= 0:
+        return None
+
+    walls = [
+        (p, q) for p, q in in_range
+        if q >= median_qty * wall_multiplier and q * p >= min_wall_usd
+    ]
+    if not walls:
+        return None
+
+    walls.sort(key=lambda w: abs(w[0] - near_price))
+    return walls[0][0]

@@ -28,6 +28,11 @@ class SignalConfig:
     orderbook_depth_levels: int
     orderbook_price_range_pct: float
     min_imbalance_ratio: float
+    # a price level's resting size must be at least this many times the local median
+    # to count as a "wall" (support/resistance). 0 disables wall-based stop refinement.
+    wall_multiplier: float = 0.0
+    min_wall_usd: float = 5000.0
+    wall_scan_depth: int = 500
 
 
 @dataclass
