@@ -2,7 +2,8 @@ import csv
 import json
 import os
 import threading
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from flask import Flask, jsonify, render_template_string, request, Response
@@ -65,23 +66,25 @@ PAGE = """
 <title>reversal_bot</title>
 <style>
   :root {
-    --bg: #07080c;
-    --bg-soft: #0d0f16;
-    --card: #12141c;
-    --border: #1e212c;
-    --text: #eef0f5;
-    --muted: #7c8296;
-    --faint: #4b5165;
-    --green: #34d399;
-    --green-soft: rgba(52, 211, 153, .12);
+    --bg: #060707;
+    --bg-soft: #0b0d0d;
+    --card: #101312;
+    --border: #1d2321;
+    --text: #f1f3f0;
+    --muted: #838d87;
+    --faint: #4c5450;
+    --green: #2dd4a7;
+    --green-soft: rgba(45, 212, 167, .13);
     --red: #fb7185;
     --red-soft: rgba(251, 113, 133, .12);
-    --accent: #6ea8fe;
-    --accent2: #a78bfa;
-    --accent-soft: rgba(110, 168, 254, .12);
-    --amber: #fbbf24;
+    --accent: #2dd4a7;
+    --accent2: #14b8a6;
+    --accent-soft: rgba(45, 212, 167, .13);
+    --gold: #f0b93a;
+    --gold-soft: rgba(240, 185, 58, .13);
+    --amber: #f0b93a;
     --radius: 16px;
-    --sidebar-w: 210px;
+    --sidebar-w: 216px;
   }
   * { box-sizing: border-box; }
   html, body { max-width: 100%; overflow-x: hidden; }
@@ -93,8 +96,8 @@ PAGE = """
   .glow {
     position: fixed; inset: 0; z-index: 0; pointer-events: none;
     background:
-      radial-gradient(680px 420px at 14% -6%, rgba(110,168,254,.16), transparent 60%),
-      radial-gradient(620px 380px at 88% 4%, rgba(167,139,250,.13), transparent 60%);
+      radial-gradient(680px 420px at 14% -6%, rgba(45,212,167,.14), transparent 60%),
+      radial-gradient(620px 380px at 88% 4%, rgba(240,185,58,.10), transparent 60%);
   }
 
   .shell { position: relative; z-index: 1; display: flex; min-height: 100vh; }
@@ -108,9 +111,10 @@ PAGE = """
   .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px 22px; }
   .brand .logo {
     width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(135deg, var(--accent), var(--accent2)); font-size: 15px; flex-shrink: 0;
-    box-shadow: 0 0 20px rgba(110,168,254,.35);
+    background: linear-gradient(135deg, var(--accent), var(--accent2)); flex-shrink: 0; color: #06110d;
+    box-shadow: 0 0 20px rgba(45,212,167,.35);
   }
+  .brand .logo svg { width: 17px; height: 17px; }
   .brand .name { font-size: 15.5px; font-weight: 700; letter-spacing: -.01em; }
   .navgroup { display: flex; flex-direction: column; gap: 3px; }
   .navbtn {
@@ -119,7 +123,8 @@ PAGE = """
     padding: 10px 12px; border-radius: 10px; cursor: pointer; font-family: inherit;
     transition: background .12s, color .12s;
   }
-  .navbtn .ic { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
+  .navbtn .ic { width: 18px; height: 18px; flex-shrink: 0; }
+  .navbtn .ic svg { width: 100%; height: 100%; }
   .navbtn:hover { background: rgba(255,255,255,.04); color: var(--text); }
   .navbtn.active { background: var(--accent-soft); color: var(--accent); }
   .sidebar-foot { margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
@@ -137,7 +142,7 @@ PAGE = """
   main { flex: 1; min-width: 0; padding: 24px 26px 90px; }
   h1.pagetitle { font-size: 19px; font-weight: 700; margin: 0 0 18px; letter-spacing: -.01em; }
 
-  .stats { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
   .stat {
     background: linear-gradient(180deg, var(--card), var(--bg-soft)); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 15px 17px; min-width: 0; position: relative; overflow: hidden;
@@ -145,12 +150,53 @@ PAGE = """
   .stat .label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin-bottom: 7px; }
   .stat .value { font-size: 21px; font-weight: 700; letter-spacing: -.01em; word-break: break-word; font-variant-numeric: tabular-nums; }
   .stat .sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
-  .stat.equity { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
-  .stat.equity svg { flex-shrink: 0; }
   .stat.winrate { display: flex; align-items: center; gap: 12px; }
   .stat.winrate .ring-wrap { position: relative; width: 52px; height: 52px; flex-shrink: 0; }
   .stat.winrate .ring-wrap .pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     font-size: 12px; font-weight: 700; }
+
+  /* ---------- hero equity chart ---------- */
+  .hero {
+    background: linear-gradient(165deg, var(--card), var(--bg-soft)); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px 22px 6px; margin-bottom: 16px; position: relative; overflow: hidden;
+  }
+  .hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .hero .label { font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin-bottom: 6px; }
+  .hero .value { font-size: 32px; font-weight: 750; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .hero .change { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; padding: 4px 10px;
+    border-radius: 999px; margin-top: 8px; }
+  .hero .change.green { background: var(--green-soft); }
+  .hero .change.red { background: var(--red-soft); }
+  .hero-chart-wrap { position: relative; margin: 6px -6px 0; }
+  #equityChart { width: 100%; height: 132px; display: block; touch-action: none; }
+  .chart-tooltip {
+    position: absolute; pointer-events: none; background: #1a1d1a; border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 9px; font-size: 11.5px; font-weight: 650; color: var(--text);
+    transform: translate(-50%, -115%); white-space: nowrap; opacity: 0; transition: opacity .1s; z-index: 3;
+    box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  }
+
+  /* ---------- allocation donut ---------- */
+  .donut-card { display: flex; align-items: center; gap: 16px; }
+  .donut-wrap { position: relative; width: 92px; height: 92px; flex-shrink: 0; }
+  .donut-wrap .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .donut-wrap .center .n { font-size: 15px; font-weight: 750; }
+  .donut-wrap .center .l { font-size: 9px; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; }
+  .donut-legend { display: flex; flex-direction: column; gap: 6px; font-size: 12px; min-width: 0; }
+  .donut-legend .row { display: flex; align-items: center; gap: 7px; }
+  .donut-legend .sw { width: 8px; height: 8px; border-radius: 3px; flex-shrink: 0; }
+  .donut-legend .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 600; }
+  .donut-legend .amt { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* ---------- daily pnl bars ---------- */
+  .barchart { display: flex; align-items: flex-end; gap: 8px; height: 92px; padding: 6px 4px 0; }
+  .barcol { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; height: 100%; }
+  .barcol .track { width: 100%; max-width: 26px; flex: 1; display: flex; align-items: flex-end; }
+  .barcol .fill { width: 100%; border-radius: 5px 5px 2px 2px; min-height: 3px; transition: height .2s; }
+  .barcol .fill.up { background: linear-gradient(180deg, var(--green), #159c7c); }
+  .barcol .fill.down { background: linear-gradient(180deg, var(--red), #d94860); }
+  .barcol .fill.zero { background: var(--border); }
+  .barcol .daylabel { font-size: 10px; color: var(--faint); font-weight: 650; }
 
   .green { color: var(--green); } .red { color: var(--red); } .muted { color: var(--muted); }
 
@@ -169,6 +215,8 @@ PAGE = """
   .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 18px 8px; margin-bottom: 16px; }
   .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   .panel-head h2 { font-size: 13.5px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 7px; }
+  .panel-head h2 .ic { width: 15px; height: 15px; flex-shrink: 0; color: var(--muted); }
+  .panel-head h2 .ic svg { width: 100%; height: 100%; }
   .panel-head .count { font-size: 11.5px; color: var(--faint); font-weight: 600; }
   .panel-head a.viewall { font-size: 11.5px; color: var(--accent); text-decoration: none; font-weight: 650; cursor: pointer; }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
@@ -203,7 +251,7 @@ PAGE = """
   td.time { color: var(--faint); font-variant-numeric: tabular-nums; }
 
   .empty { color: var(--faint); font-size: 13px; text-align: center; padding: 26px 0; }
-  .empty .ico { font-size: 24px; display: block; margin-bottom: 6px; opacity: .5; }
+  .empty .ico { width: 30px; height: 30px; margin: 0 auto 8px; opacity: .35; display: block; }
 
   .page { display: none; }
   .page.active { display: block; }
@@ -223,16 +271,19 @@ PAGE = """
       display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; font-weight: 650;
       padding: 4px 0; cursor: pointer;
     }
-    .bottomnav button .ic { font-size: 18px; }
+    .bottomnav button .ic { width: 20px; height: 20px; }
+    .bottomnav button .ic svg { width: 100%; height: 100%; }
     .bottomnav button.active { color: var(--accent); }
     .stats { grid-template-columns: 1fr 1fr; gap: 8px; }
     .stat { padding: 12px 13px; border-radius: 12px; }
     .stat .value { font-size: 17px; }
-    .stat.equity { grid-column: 1 / -1; }
-    .stat.equity .value { font-size: 21px; }
     .two-col { grid-template-columns: 1fr; }
     .panel { padding: 14px 14px 6px; border-radius: 13px; }
     h1.pagetitle { font-size: 17px; }
+    .hero { padding: 16px 16px 4px; border-radius: 13px; }
+    .hero .value { font-size: 26px; }
+    #equityChart { height: 108px; }
+    .donut-card { flex-direction: column; align-items: flex-start; }
   }
 </style>
 </head>
@@ -240,12 +291,15 @@ PAGE = """
 <div class="glow"></div>
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand"><div class="logo">🤖</div><div class="name">reversal_bot</div></div>
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></div>
+      <div class="name">reversal_bot</div>
+    </div>
     <div class="navgroup">
-      <button class="navbtn active" data-page="overview"><span class="ic">🏠</span>Overview</button>
-      <button class="navbtn" data-page="positions"><span class="ic">📌</span>Positions</button>
-      <button class="navbtn" data-page="scan"><span class="ic">📡</span>Market Scan</button>
-      <button class="navbtn" data-page="history"><span class="ic">📜</span>History</button>
+      <button class="navbtn active" data-page="overview"><span class="ic">__IC_HOME__</span>Overview</button>
+      <button class="navbtn" data-page="positions"><span class="ic">__IC_POSITIONS__</span>Positions</button>
+      <button class="navbtn" data-page="scan"><span class="ic">__IC_SCAN__</span>Market Scan</button>
+      <button class="navbtn" data-page="history"><span class="ic">__IC_HISTORY__</span>History</button>
     </div>
     <div class="sidebar-foot">
       <div class="live"><span class="dot"></span><span id="lastUpdate">connecting…</span></div>
@@ -254,44 +308,71 @@ PAGE = """
   </aside>
 
   <main>
-    <div class="stats">
-      <div class="stat equity">
-        <div><div class="label">Equity</div><div class="value" id="equity">-</div></div>
-        <svg id="sparkline" width="96" height="34" viewBox="0 0 96 34"></svg>
-      </div>
-      <div class="stat"><div class="label">Open</div><div class="value" id="posCount">-</div></div>
-      <div class="stat winrate">
-        <div class="ring-wrap">
-          <svg width="52" height="52" viewBox="0 0 52 52">
-            <circle cx="26" cy="26" r="21" fill="none" stroke="rgba(124,130,150,.15)" stroke-width="6"/>
-            <circle id="wrRing" cx="26" cy="26" r="21" fill="none" stroke="#34d399" stroke-width="6"
-              stroke-dasharray="132" stroke-dashoffset="132" stroke-linecap="round" transform="rotate(-90 26 26)"/>
-          </svg>
-          <div class="pct" id="winRate">-</div>
-        </div>
-        <div><div class="label">Win rate</div><div class="sub" id="winRateSub">-</div></div>
-      </div>
-      <div class="stat"><div class="label">Realized P&amp;L</div><div class="value" id="totalPnl">-</div></div>
-      <div class="stat"><div class="label">Today</div><div class="value" id="todayPnl">-</div></div>
-    </div>
-
     <section id="page-overview" class="page active">
+      <div class="hero">
+        <div class="hero-top">
+          <div>
+            <div class="label">Equity</div>
+            <div class="value" id="equity">-</div>
+            <span class="change" id="equityChange">-</span>
+          </div>
+        </div>
+        <div class="hero-chart-wrap">
+          <svg id="equityChart" viewBox="0 0 600 132" preserveAspectRatio="none"></svg>
+          <div class="chart-tooltip" id="chartTooltip"></div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="label">Open</div><div class="value" id="posCount">-</div></div>
+        <div class="stat winrate">
+          <div class="ring-wrap">
+            <svg width="52" height="52" viewBox="0 0 52 52">
+              <circle cx="26" cy="26" r="21" fill="none" stroke="rgba(124,130,150,.15)" stroke-width="6"/>
+              <circle id="wrRing" cx="26" cy="26" r="21" fill="none" stroke="#2dd4a7" stroke-width="6"
+                stroke-dasharray="132" stroke-dashoffset="132" stroke-linecap="round" transform="rotate(-90 26 26)"/>
+            </svg>
+            <div class="pct" id="winRate">-</div>
+          </div>
+          <div><div class="label">Win rate</div><div class="sub" id="winRateSub">-</div></div>
+        </div>
+        <div class="stat"><div class="label">Realized P&amp;L</div><div class="value" id="totalPnl">-</div></div>
+        <div class="stat"><div class="label">Today</div><div class="value" id="todayPnl">-</div></div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel donut-card">
+          <div>
+            <div class="panel-head" style="margin-bottom:14px"><h2>Margin allocation</h2></div>
+            <div class="donut-wrap">
+              <svg width="92" height="92" viewBox="0 0 92 92" id="allocDonut"></svg>
+              <div class="center"><div class="n" id="allocFreePct">-</div><div class="l">free</div></div>
+            </div>
+          </div>
+          <div class="donut-legend" id="allocLegend"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Daily P&amp;L (7d)</h2></div>
+          <div class="barchart" id="dailyBars"></div>
+        </div>
+      </div>
+
       <div class="two-col">
         <div class="panel">
-          <div class="panel-head"><h2>📌 Open positions</h2><a class="viewall" data-goto="positions">View all</a></div>
+          <div class="panel-head"><h2><span class="ic">__IC_POSITIONS__</span> Open positions</h2><a class="viewall" data-goto="positions">View all</a></div>
           <div class="poslist" id="posListPreview"></div>
-          <div class="empty" id="positionsEmptyPreview"><span class="ico">💤</span>No open positions</div>
+          <div class="empty" id="positionsEmptyPreview">__ICO_SLEEP__ No open positions</div>
         </div>
         <div class="panel">
-          <div class="panel-head"><h2>📡 Last scan</h2><a class="viewall" data-goto="scan">View all</a></div>
+          <div class="panel-head"><h2><span class="ic">__IC_SCAN__</span> Last scan</h2><a class="viewall" data-goto="scan">View all</a></div>
           <div class="moverlist" id="moverListPreview"></div>
-          <div class="empty" id="moversEmptyPreview" style="display:none"><span class="ico">📭</span>No data yet</div>
+          <div class="empty" id="moversEmptyPreview" style="display:none">__ICO_INBOX__ No data yet</div>
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>📜 Recent activity</h2><a class="viewall" data-goto="history">View all</a></div>
+        <div class="panel-head"><h2><span class="ic">__IC_HISTORY__</span> Recent activity</h2><a class="viewall" data-goto="history">View all</a></div>
         <div class="table-wrap"><table id="historyTablePreview"><thead><tr><th>Time</th><th>Event</th><th>Coin</th><th>Side</th><th>PnL</th></tr></thead><tbody></tbody></table></div>
-        <div class="empty" id="historyEmptyPreview" style="display:none"><span class="ico">🗒️</span>No trades yet</div>
+        <div class="empty" id="historyEmptyPreview" style="display:none">__ICO_FILE__ No trades yet</div>
       </div>
     </section>
 
@@ -299,7 +380,7 @@ PAGE = """
       <h1 class="pagetitle">Open Positions</h1>
       <div class="panel">
         <div class="poslist" id="posListFull"></div>
-        <div class="empty" id="positionsEmptyFull"><span class="ico">💤</span>No open positions right now</div>
+        <div class="empty" id="positionsEmptyFull">__ICO_SLEEP__ No open positions right now</div>
       </div>
     </section>
 
@@ -308,7 +389,7 @@ PAGE = """
       <div class="panel">
         <div class="panel-head"><h2>Coins with the biggest recent move</h2><span class="count" id="scanCountLabel"></span></div>
         <div class="moverlist" id="moverListFull"></div>
-        <div class="empty" id="moversEmptyFull" style="display:none"><span class="ico">📭</span>No data yet</div>
+        <div class="empty" id="moversEmptyFull" style="display:none">__ICO_INBOX__ No data yet</div>
       </div>
     </section>
 
@@ -318,17 +399,17 @@ PAGE = """
         <div class="table-wrap">
           <table id="historyTableFull"><thead><tr><th>Time</th><th>Event</th><th>Coin</th><th>Side</th><th>Entry</th><th>Stop</th><th>TP</th><th>PnL</th><th>Reason</th></tr></thead><tbody></tbody></table>
         </div>
-        <div class="empty" id="historyEmptyFull" style="display:none"><span class="ico">🗒️</span>No trades yet</div>
+        <div class="empty" id="historyEmptyFull" style="display:none">__ICO_FILE__ No trades yet</div>
       </div>
     </section>
   </main>
 </div>
 
 <nav class="bottomnav">
-  <button class="active" data-page="overview"><span class="ic">🏠</span>Overview</button>
-  <button data-page="positions"><span class="ic">📌</span>Positions</button>
-  <button data-page="scan"><span class="ic">📡</span>Scan</button>
-  <button data-page="history"><span class="ic">📜</span>History</button>
+  <button class="active" data-page="overview"><span class="ic">__IC_HOME__</span>Overview</button>
+  <button data-page="positions"><span class="ic">__IC_POSITIONS__</span>Positions</button>
+  <button data-page="scan"><span class="ic">__IC_SCAN__</span>Scan</button>
+  <button data-page="history"><span class="ic">__IC_HISTORY__</span>History</button>
 </nav>
 
 <script>
@@ -450,25 +531,134 @@ function renderHistoryPreview(tbody, rows) {
   }
 }
 
-function drawSparkline(history, equityNow) {
-  const svg = document.getElementById('sparkline');
+let equityChartPoints = [];
+
+function drawEquityChart(history, equityNow) {
+  const svg = document.getElementById('equityChart');
   const closed = history.filter(h => h.event === 'exit' && h.pnl).slice().reverse();
-  if (closed.length < 2) { svg.innerHTML = ''; return; }
-  let running = equityNow - closed.reduce((s, h) => s + parseFloat(h.pnl), 0);
-  const points = [running];
-  for (const h of closed) { running += parseFloat(h.pnl); points.push(running); }
+  const W = 600, H = 132, padX = 4, padY = 10;
+
+  let points;
+  if (closed.length < 2) {
+    points = [equityNow, equityNow]; // not enough data yet - flat line so the panel isn't blank
+  } else {
+    let running = equityNow - closed.reduce((s, h) => s + parseFloat(h.pnl), 0);
+    points = [running];
+    for (const h of closed) { running += parseFloat(h.pnl); points.push(running); }
+  }
+
   const min = Math.min(...points), max = Math.max(...points);
-  const range = (max - min) || 1;
-  const w = 96, h = 34, pad = 3;
-  const step = (w - pad * 2) / (points.length - 1);
-  const coords = points.map((v, i) => [pad + i * step, h - pad - (v - min) / range * (h - pad * 2)]);
+  const range = (max - min) || Math.max(1, Math.abs(points[0]) * 0.02);
+  const step = points.length > 1 ? (W - padX * 2) / (points.length - 1) : 0;
+  const coords = points.map((v, i) => [padX + i * step, H - padY - (v - min) / range * (H - padY * 2)]);
+  equityChartPoints = coords.map((c, i) => ({ x: c[0], y: c[1], value: points[i] }));
+
   const line = coords.map(c => c.join(',')).join(' ');
   const up = points[points.length - 1] >= points[0];
-  const color = up ? '#34d399' : '#fb7185';
-  const areaPath = `M${coords[0][0]},${h} L` + line + ` L${coords[coords.length - 1][0]},${h} Z`;
+  const color = up ? '#2dd4a7' : '#fb7185';
+  const areaPath = `M${coords[0][0]},${H} L` + line + ` L${coords[coords.length - 1][0]},${H} Z`;
+
+  let grid = '';
+  for (let i = 1; i < 4; i++) {
+    const y = (H - padY * 2) / 4 * i + padY * 0.6;
+    grid += `<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.05)" stroke-width="1"/>`;
+  }
+
   svg.innerHTML = `
-    <path d="${areaPath}" fill="${color}" opacity="0.12"></path>
-    <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>`;
+    <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid}
+    <path d="${areaPath}" fill="url(#areaGrad)"></path>
+    <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    <circle cx="${coords[coords.length - 1][0]}" cy="${coords[coords.length - 1][1]}" r="3.5" fill="${color}"></circle>
+    <circle id="hoverDot" cx="0" cy="0" r="4" fill="${color}" stroke="#0b0d0d" stroke-width="2" style="opacity:0;pointer-events:none"></circle>`;
+
+  const changeEl = document.getElementById('equityChange');
+  const diff = points[points.length - 1] - points[0];
+  const diffPct = points[0] !== 0 ? (diff / points[0] * 100) : 0;
+  changeEl.textContent = (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' USDT (' + (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%) since oldest trade shown';
+  changeEl.className = 'change ' + (diff >= 0 ? 'green' : 'red');
+}
+
+// wired once (not inside refresh) - the SVG contents get replaced each refresh, so this
+// re-reads equityChartPoints (updated by drawEquityChart) and re-queries #hoverDot fresh each time
+(function initChartHover() {
+  const svg = document.getElementById('equityChart');
+  const tooltip = document.getElementById('chartTooltip');
+  function handleMove(clientX) {
+    if (!equityChartPoints.length) return;
+    const rect = svg.getBoundingClientRect();
+    const relX = (clientX - rect.left) / rect.width * 600;
+    let nearest = equityChartPoints[0], minDist = Infinity;
+    for (const p of equityChartPoints) {
+      const d = Math.abs(p.x - relX);
+      if (d < minDist) { minDist = d; nearest = p; }
+    }
+    const dot = document.getElementById('hoverDot');
+    if (dot) { dot.setAttribute('cx', nearest.x); dot.setAttribute('cy', nearest.y); dot.style.opacity = '1'; }
+    tooltip.style.opacity = '1';
+    tooltip.style.left = (nearest.x / 600 * rect.width) + 'px';
+    tooltip.style.top = (nearest.y / 132 * rect.height) + 'px';
+    tooltip.textContent = fmtNum(nearest.value, 2) + ' USDT';
+  }
+  svg.addEventListener('mousemove', e => handleMove(e.clientX));
+  svg.addEventListener('mouseleave', () => {
+    tooltip.style.opacity = '0';
+    const dot = document.getElementById('hoverDot');
+    if (dot) dot.style.opacity = '0';
+  });
+  svg.addEventListener('touchmove', e => { if (e.touches[0]) handleMove(e.touches[0].clientX); }, { passive: true });
+})();
+
+function renderAllocationDonut(positions, equity) {
+  const svg = document.getElementById('allocDonut');
+  const legend = document.getElementById('allocLegend');
+  const freeLabel = document.getElementById('allocFreePct');
+  const cx = 46, cy = 46, r = 38, strokeW = 13;
+  const circumference = 2 * Math.PI * r;
+
+  const totalMargin = positions.reduce((s, p) => s + (p.margin || 0), 0);
+  const freeAmt = Math.max(0, equity - totalMargin);
+  const freePct = equity > 0 ? (freeAmt / equity * 100) : 100;
+  freeLabel.textContent = freePct.toFixed(0) + '%';
+
+  const segments = positions
+    .filter(p => (p.margin || 0) > 0)
+    .map(p => ({ label: coinName(p.symbol), amt: p.margin, color: avatarColor(coinName(p.symbol)) }));
+  segments.push({ label: 'Free', amt: freeAmt, color: 'rgba(255,255,255,.09)' });
+
+  let offset = 0, circles = '';
+  for (const seg of segments) {
+    const frac = equity > 0 ? seg.amt / equity : 0;
+    const len = frac * circumference;
+    circles += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="${strokeW}"
+      stroke-dasharray="${len.toFixed(2)} ${(circumference - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}"
+      transform="rotate(-90 ${cx} ${cy})" stroke-linecap="butt"></circle>`;
+    offset += len;
+  }
+  svg.innerHTML = circles;
+
+  legend.innerHTML = segments.filter(s => s.amt > 0.01).map(s => `
+    <div class="row"><span class="sw" style="background:${s.color}"></span>
+      <span class="name">${s.label}</span><span class="amt">${fmtNum(s.amt, 0)}</span></div>`).join('')
+    || '<div class="row muted">Nothing deployed</div>';
+}
+
+function renderDailyBars(dailyPnl) {
+  const container = document.getElementById('dailyBars');
+  const maxAbs = Math.max(1, ...dailyPnl.map(d => Math.abs(d.pnl)));
+  container.innerHTML = dailyPnl.map(d => {
+    const heightPct = Math.max(4, Math.abs(d.pnl) / maxAbs * 100);
+    const cls = d.pnl > 0 ? 'up' : d.pnl < 0 ? 'down' : 'zero';
+    const day = new Date(d.date + 'T00:00:00Z').toLocaleDateString(undefined, { weekday: 'short' });
+    const sign = d.pnl >= 0 ? '+' : '';
+    return `<div class="barcol" title="${d.date}: ${sign}${d.pnl} USDT">
+      <div class="track"><div class="fill ${cls}" style="height:${heightPct}%"></div></div>
+      <div class="daylabel">${day}</div>
+    </div>`;
+  }).join('');
 }
 
 async function refresh() {
@@ -492,7 +682,7 @@ async function refresh() {
   const ring = document.getElementById('wrRing');
   const circumference = 132;
   ring.setAttribute('stroke-dashoffset', String(circumference - (wr / 100) * circumference));
-  ring.setAttribute('stroke', wr >= 50 ? '#34d399' : '#fb7185');
+  ring.setAttribute('stroke', wr >= 50 ? '#2dd4a7' : '#fb7185');
 
   const pnlEl = document.getElementById('totalPnl');
   pnlEl.textContent = (data.stats.total_pnl >= 0 ? '+' : '') + fmtNum(data.stats.total_pnl, 2) + ' USDT';
@@ -502,7 +692,9 @@ async function refresh() {
   todayEl.textContent = (data.stats.today_pnl >= 0 ? '+' : '') + fmtNum(data.stats.today_pnl, 2) + ' USDT';
   todayEl.className = 'value ' + (data.stats.today_pnl >= 0 ? 'green' : 'red');
 
-  drawSparkline(data.history, data.equity);
+  drawEquityChart(data.history, data.equity);
+  renderAllocationDonut(data.positions, data.equity);
+  renderDailyBars(data.daily_pnl || []);
 
   // positions: overview preview (top 3) + full page
   renderPositions(document.getElementById('posListPreview'), data.positions.slice(0, 3));
@@ -530,6 +722,46 @@ setInterval(refresh, 5000);
 </body>
 </html>
 """
+
+_ICON_SVGS = {
+    "__IC_HOME__": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
+        '<polyline points="9 22 9 12 15 12 15 22"/></svg>'
+    ),
+    "__IC_POSITIONS__": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/>'
+        '<polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>'
+    ),
+    "__IC_SCAN__": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/>'
+        '<path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.25a6 6 0 0 1 0-8.49'
+        'M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>'
+    ),
+    "__IC_HISTORY__": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>'
+        '<polyline points="12 6 12 12 16 14"/></svg>'
+    ),
+    "__ICO_SLEEP__": (
+        '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>'
+    ),
+    "__ICO_INBOX__": (
+        '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" '
+        'stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>'
+        '<path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
+    ),
+    "__ICO_FILE__": (
+        '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>'
+        '<polyline points="14 2 14 8 20 8"/></svg>'
+    ),
+}
+for _token, _svg in _ICON_SVGS.items():
+    PAGE = PAGE.replace(_token, _svg)
 
 
 @app.route("/health")
@@ -608,6 +840,7 @@ def api_status():
             "mark": p.get("markPrice"),
             "upnl": None if stale else round(float(p.get("unrealizedPnl") or 0), 2),
             "stale": stale,
+            "margin": float(p.get("info", {}).get("initialMargin") or 0),
         })
 
     scan_time, movers = None, []
@@ -638,10 +871,21 @@ def api_status():
         "today_pnl": today_pnl,
     }
 
+    by_day = defaultdict(float)
+    for r in exit_rows:
+        by_day[r["time"][:10]] += r["pnl"]
+    today_date = datetime.now(timezone.utc).date()
+    daily_pnl = [
+        {"date": (today_date - timedelta(days=i)).isoformat(),
+         "pnl": round(by_day.get((today_date - timedelta(days=i)).isoformat(), 0.0), 2)}
+        for i in range(6, -1, -1)
+    ]
+
     return jsonify({
         "mode": "TESTNET/DEMO" if cfg.testnet else "LIVE",
         "equity": equity,
         "positions": positions,
+        "daily_pnl": daily_pnl,
         "movers": movers,
         "scan_time": scan_time,
         "history": history[-30:],
