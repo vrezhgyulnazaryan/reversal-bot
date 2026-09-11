@@ -72,7 +72,15 @@ python run_live.py --i-understand-the-risk
 
 - `risk_per_trade_pct` capped by `max_risk_per_trade_pct` - the bot raises an error at
   startup if you set the former above the latter.
-- `max_leverage` caps position size regardless of how tight the stop is.
+- `min_leverage` / `max_leverage` bound the leverage used per trade. Note leverage on
+  its own doesn't change dollar risk when a stop-loss is in place - it only changes how
+  much margin a position uses and how close liquidation sits. Risk per trade is still
+  governed by `risk_per_trade_pct` and the stop-loss distance.
+- `max_stop_pct` caps how far the ATR-based stop-loss can sit from entry, tightening it
+  on symbols volatile enough that the raw ATR distance would exceed it.
+- `profit_lock_trigger_usd` / `trail_atr_mult` trail the stop `trail_atr_mult` ATRs
+  behind price once profit crosses the trigger - re-evaluated and only tightened every
+  cycle, so the buffer scales with each symbol's volatility instead of a fixed amount.
 - `daily_loss_limit_pct` halts new entries for the day once hit.
 - `max_concurrent_positions` caps how many trades are open at once.
 - Stop-loss and take-profit are placed as real `STOP_MARKET` / `TAKE_PROFIT_MARKET`
