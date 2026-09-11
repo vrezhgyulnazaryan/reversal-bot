@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 
 from .config import Config
 from .exchange import build_exchange
-from .data import fetch_ohlcv_df, scan_movers, fetch_orderbook_imbalance, find_nearest_wall
+from .data import fetch_ohlcv_df, scan_movers, scan_quiet_coins, fetch_orderbook_imbalance, find_nearest_wall
 from .strategy import compute_signal, Signal
+from .orderbook_strategy import compute_orderbook_signal
 from .risk import position_size, DailyLossGuard
 from . import indicators as ind
 
@@ -41,6 +42,7 @@ class LiveTrader:
         self.open_symbols = set()
         self.open_trades = {}  # symbol -> dict(entry metadata) for trades this bot opened
         self.pending_entries = {}  # symbol -> dict(unfilled limit entry order state)
+        self.obi_state = {}  # symbol -> dict(order-book-imbalance persistence tracking)
         print(f"[init] mode={'TESTNET' if cfg.testnet else 'LIVE'} equity={equity:.2f} USDT", flush=True)
 
     def _equity(self) -> float:
@@ -270,6 +272,57 @@ class LiveTrader:
                 self._evaluate_symbol(symbol)
             except Exception as e:
                 print(f"[error] {symbol}: {e}", flush=True)
+
+        # second, fully independent strategy - never touches a symbol the scan above
+        # is already looking at, only runs if there's still room for another position
+        if self.cfg.orderbook_strategy.enabled:
+            occupied = len(self.open_symbols) + len(self.pending_entries)
+            if occupied < self.cfg.risk.max_concurrent_positions:
+                mover_symbols = {s for s, _ in movers}
+                quiet_candidates = scan_quiet_coins(
+                    self.exchange,
+                    self.cfg.scan.quote_currency,
+                    exclude_symbols=self.open_symbols | set(self.pending_entries) | mover_symbols,
+                    top_n=self.cfg.orderbook_strategy.top_n_candidates,
+                    min_quote_volume_usd=self.cfg.orderbook_strategy.min_quote_volume_usd,
+                    max_abs_move_pct=self.cfg.orderbook_strategy.max_abs_move_pct,
+                )
+                for symbol in quiet_candidates:
+                    if len(self.open_symbols) + len(self.pending_entries) >= self.cfg.risk.max_concurrent_positions:
+                        break
+                    try:
+                        self._evaluate_symbol_orderbook(symbol)
+                    except Exception as e:
+                        print(f"[error] orderbook {symbol}: {e}", flush=True)
+
+    def _evaluate_symbol_orderbook(self, symbol: str):
+        sig = compute_orderbook_signal(self.exchange, symbol, self.cfg.orderbook_strategy, self.obi_state)
+        if sig is None:
+            return
+
+        df = fetch_ohlcv_df(self.exchange, symbol, self.cfg.timeframe, self.cfg.lookback_bars)
+        if self._too_correlated_with_open(symbol, df):
+            return
+        if self._funding_rate_blocks_entry(symbol, sig.side):
+            return
+
+        equity = self._equity()
+        available_margin = self._available_margin()
+        sizing = position_size(equity, sig.entry, sig.stop, self.cfg.risk, available_margin)
+        if sizing.qty <= 0:
+            return
+
+        print(f"[signal] {symbol} {sig.side} (orderbook_imbalance) entry={sig.entry:.6f} stop={sig.stop:.6f} "
+              f"tp={sig.take_profit:.6f} qty={sizing.qty:.6f} lev={sizing.leverage}x reason={sig.reason}", flush=True)
+
+        try:
+            self.exchange.set_margin_mode("cross", symbol)
+        except Exception:
+            pass
+        self.exchange.set_leverage(sizing.leverage, symbol)
+        side = "buy" if sig.side == "long" else "sell"
+        entry_order = self.exchange.create_order(symbol, "market", side, sizing.qty)
+        self._finalize_entry(symbol, sig, sizing, sizing.qty, entry_order)
 
     def _place_reduce_only_stop(self, symbol: str, side: str, qty: float, order_type: str, trigger_price: float) -> str:
         # Binance migrated conditional orders (STOP_MARKET/TAKE_PROFIT_MARKET/etc) off

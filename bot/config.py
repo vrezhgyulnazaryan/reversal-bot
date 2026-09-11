@@ -91,6 +91,35 @@ class RiskConfig:
 
 
 @dataclass
+class OrderbookStrategyConfig:
+    """A second, independent strategy from the mean-reversion one above - it never
+    touches symbols that strategy is already looking at (big 24h movers), and never
+    shares its signal logic. Based on the standard "order book imbalance" concept:
+    OBI = (bid_volume - ask_volume) / (bid_volume + ask_volume) in a window near
+    price, ranging -1..+1. A momentary strong reading is easy to fake (spoofing), so
+    this requires the imbalance to persist across several consecutive polls AND be
+    backed by a genuine large resting order (a wall) before it counts as a signal."""
+    enabled: bool = False
+    top_n_candidates: int = 20
+    min_quote_volume_usd: float = 20000000.0
+    # stay out of the mean-reversion strategy's territory - skip anything that's
+    # already moved more than this much in 24h
+    max_abs_move_pct: float = 5.0
+    obi_depth_levels: int = 20
+    obi_price_range_pct: float = 0.5
+    # normalized -1..+1 scale; 0.6 ~= 80% dominance on one side
+    obi_threshold: float = 0.6
+    # the imbalance must read past the threshold for this many consecutive polls
+    # before it's trusted (filters single-snapshot noise/spoofing)
+    obi_persist_cycles: int = 2
+    wall_multiplier: float = 5.0
+    min_wall_usd: float = 5000.0
+    wall_scan_depth: int = 500
+    max_stop_pct: float = 5.0
+    take_profit_r_multiple: float = 1.5
+
+
+@dataclass
 class ExecutionConfig:
     order_type: str
     poll_interval_sec: int
@@ -111,6 +140,7 @@ class Config:
     signal: SignalConfig
     risk: RiskConfig
     execution: ExecutionConfig
+    orderbook_strategy: OrderbookStrategyConfig
     api_key: str = ""
     api_secret: str = ""
 
@@ -127,6 +157,7 @@ class Config:
             signal=SignalConfig(**raw["signal"]),
             risk=RiskConfig(**raw["risk"]),
             execution=ExecutionConfig(**raw["execution"]),
+            orderbook_strategy=OrderbookStrategyConfig(**raw.get("orderbook_strategy", {})),
             api_key=os.getenv("BINANCE_API_KEY", ""),
             api_secret=os.getenv("BINANCE_API_SECRET", ""),
         )

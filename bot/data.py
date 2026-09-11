@@ -35,6 +35,55 @@ def scan_movers(
     return candidates[:top_n]
 
 
+def scan_quiet_coins(
+    exchange: ccxt.Exchange, quote_currency: str, exclude_symbols: set, top_n: int,
+    min_quote_volume_usd: float, max_abs_move_pct: float,
+):
+    """The mirror image of scan_movers(): liquid coins that HAVEN'T made a big move
+    in the last 24h, ranked by volume. This is the mean-reversion strategy's blind
+    spot - it only ever looks at big movers - so the order-book-imbalance strategy
+    gets a genuinely separate universe to work with instead of competing for the
+    same symbols.
+    """
+    tickers = exchange.fetch_tickers()
+    candidates = []
+    for symbol, t in tickers.items():
+        if symbol in exclude_symbols:
+            continue
+        market = exchange.markets.get(symbol)
+        if not market or not market.get("swap") or market.get("quote") != quote_currency:
+            continue
+        qv = float(t.get("quoteVolume") or 0)
+        if qv < min_quote_volume_usd:
+            continue
+        pct = t.get("percentage")
+        if pct is not None and abs(pct) > max_abs_move_pct:
+            continue
+        candidates.append((symbol, qv))
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return [s for s, _ in candidates[:top_n]]
+
+
+def fetch_normalized_imbalance(exchange: ccxt.Exchange, symbol: str, depth: int, price_range_pct: float) -> float:
+    """(bid_volume - ask_volume) / (bid_volume + ask_volume) within price_range_pct of
+    mid, using top `depth` levels - the standard order-book-imbalance formula, ranges
+    -1 (all asks) to +1 (all bids). Unlike fetch_orderbook_imbalance's raw ratio, this
+    is meant to be a primary signal on its own, not just a confirmation multiplier."""
+    ob = exchange.fetch_order_book(symbol, limit=depth)
+    bids, asks = ob["bids"], ob["asks"]
+    if not bids or not asks:
+        return 0.0
+    mid = (bids[0][0] + asks[0][0]) / 2
+    lo = mid * (1 - price_range_pct / 100)
+    hi = mid * (1 + price_range_pct / 100)
+    bid_vol = sum(qty for price, qty in bids if price >= lo)
+    ask_vol = sum(qty for price, qty in asks if price <= hi)
+    total = bid_vol + ask_vol
+    if total == 0:
+        return 0.0
+    return (bid_vol - ask_vol) / total
+
+
 def fetch_orderbook_imbalance(exchange: ccxt.Exchange, symbol: str, depth: int, price_range_pct: float) -> float:
     """bid_volume / ask_volume within price_range_pct of mid, using top `depth` levels."""
     ob = exchange.fetch_order_book(symbol, limit=depth)

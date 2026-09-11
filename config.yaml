@@ -76,3 +76,23 @@ execution:
   # modification bolted onto this strategy's execution.
   use_limit_entry: false
   entry_limit_timeout_sec: 90
+
+# a second, fully independent strategy - never touches symbols the mean-reversion
+# strategy above is already looking at (big 24h movers). Looks for a strong,
+# persistent order-book imbalance backed by a real resting wall, on quiet/liquid
+# coins that haven't made a big move yet - a leading signal instead of reacting to
+# a move that's already happened.
+orderbook_strategy:
+  enabled: true
+  top_n_candidates: 20
+  min_quote_volume_usd: 20000000
+  max_abs_move_pct: 5.0
+  obi_depth_levels: 20
+  obi_price_range_pct: 0.5
+  obi_threshold: 0.6
+  obi_persist_cycles: 2
+  wall_multiplier: 5.0
+  min_wall_usd: 5000
+  wall_scan_depth: 500
+  max_stop_pct: 5.0
+  take_profit_r_multiple: 1.5
