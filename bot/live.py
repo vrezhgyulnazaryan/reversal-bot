@@ -9,6 +9,7 @@ from .exchange import build_exchange
 from .data import fetch_ohlcv_df, scan_movers, fetch_orderbook_imbalance
 from .strategy import compute_signal
 from .risk import position_size, DailyLossGuard
+from . import indicators as ind
 
 LOG_PATH = "trades_log.csv"
 STATUS_PATH = "status.json"
@@ -129,7 +130,7 @@ class LiveTrader:
 
         self._sweep_orphaned_algo_orders(positions)
 
-        self._check_profit_locks(positions)
+        self._check_trailing_stops(positions)
 
         if len(self.open_symbols) >= self.cfg.risk.max_concurrent_positions:
             print(f"[{now}] max concurrent positions reached, skipping scan", flush=True)
@@ -172,15 +173,21 @@ class LiveTrader:
         })
         return str(response.get("algoId"))
 
-    def _check_profit_locks(self, positions: list):
+    def _check_trailing_stops(self, positions: list):
+        """Once a position's profit reaches profit_lock_trigger_usd, trail its stop
+        trail_atr_mult ATRs behind the current price every cycle - tightened only,
+        never loosened. ATR-based instead of a fixed dollar amount so the buffer scales
+        with each symbol's actual volatility (a fixed-dollar lock sat too close to price
+        on a volatile symbol and got stopped out by ordinary noise before the move
+        continued toward the original take-profit)."""
         trigger = self.cfg.risk.profit_lock_trigger_usd
-        lock_amount = self.cfg.risk.profit_lock_amount_usd
+        trail_mult = self.cfg.risk.trail_atr_mult
         if trigger <= 0:
             return
 
         positions_by_symbol = {p["symbol"]: p for p in positions}
         for symbol, meta in self.open_trades.items():
-            if meta.get("profit_locked") or "stop_algo_id" not in meta:
+            if "stop_algo_id" not in meta:
                 continue
             pos = positions_by_symbol.get(symbol)
             if pos is None:
@@ -192,47 +199,59 @@ class LiveTrader:
             # cycle rather than act on it.
             mark_price = float(pos.get("markPrice") or 0)
             if mark_price <= 0:
-                print(f"[warn] {symbol} markPrice is {mark_price}, skipping profit-lock check "
+                print(f"[warn] {symbol} markPrice is {mark_price}, skipping trailing-stop check "
                       f"this cycle (looks like a stale/broken price feed)", flush=True)
                 continue
 
             upnl = float(pos.get("unrealizedPnl") or 0)
-            if upnl < trigger:
+            if not meta.get("trailing_active") and upnl < trigger:
+                continue
+
+            try:
+                df = fetch_ohlcv_df(self.exchange, symbol, self.cfg.timeframe, self.cfg.lookback_bars)
+                atr_val = ind.atr(df["high"], df["low"], df["close"], self.cfg.signal.atr_period).iloc[-1]
+            except Exception as e:
+                print(f"[warn] could not compute ATR for trailing stop on {symbol}: {e}", flush=True)
                 continue
 
             qty = meta["qty"]
-            entry = meta["entry"]
             if meta["side"] == "long":
-                new_stop = entry + lock_amount / qty
+                candidate_stop = mark_price - trail_mult * atr_val
+                improved = candidate_stop > meta["current_stop"]
             else:
-                new_stop = entry - lock_amount / qty
+                candidate_stop = mark_price + trail_mult * atr_val
+                improved = candidate_stop < meta["current_stop"]
+
+            if not improved:
+                continue
 
             try:
                 # place the new stop BEFORE cancelling the old one - if this fails, the
                 # position is still protected by the original stop instead of sitting
                 # naked until the next cycle
                 opposite = "sell" if meta["side"] == "long" else "buy"
-                new_stop_id = self._place_reduce_only_stop(symbol, opposite, qty, "STOP_MARKET", new_stop)
+                new_stop_id = self._place_reduce_only_stop(symbol, opposite, qty, "STOP_MARKET", candidate_stop)
             except Exception as e:
-                print(f"[error] profit lock failed for {symbol}, original stop left in place: {e}", flush=True)
+                print(f"[error] trailing stop update failed for {symbol}, original stop left in place: {e}", flush=True)
                 continue
 
             try:
                 self.exchange.cancel_order(meta["stop_algo_id"], symbol, params={"trigger": True})
             except Exception as e:
-                print(f"[warn] could not cancel old stop for {symbol} after placing new one "
+                print(f"[warn] could not cancel old stop for {symbol} after trailing "
                       f"(position now has two stops, which is safe but redundant): {e}", flush=True)
 
             meta["stop_algo_id"] = new_stop_id
-            meta["profit_locked"] = True
-            print(f"[profit-lock] {symbol} uPnL={upnl:.2f} -> moved stop to {new_stop:.6f} "
-                  f"(locking ~{lock_amount} USD)", flush=True)
+            meta["current_stop"] = candidate_stop
+            meta["trailing_active"] = True
+            print(f"[trail-stop] {symbol} uPnL={upnl:.2f} -> moved stop to {candidate_stop:.6f} "
+                  f"({trail_mult}x ATR behind mark={mark_price:.6f})", flush=True)
             _log_row({
                 "time": datetime.now(timezone.utc).isoformat(),
-                "event": "profit_lock",
+                "event": "trail_stop",
                 "symbol": symbol,
                 "side": meta["side"],
-                "stop": new_stop,
+                "stop": candidate_stop,
             })
 
     def _evaluate_symbol(self, symbol: str):
@@ -287,7 +306,8 @@ class LiveTrader:
             "entry": sig.entry,
             "qty": sizing.qty,
             "stop_algo_id": stop_algo_id,
-            "profit_locked": False,
+            "current_stop": sig.stop,
+            "trailing_active": False,
         }
         _log_row({
             "time": datetime.now(timezone.utc).isoformat(),

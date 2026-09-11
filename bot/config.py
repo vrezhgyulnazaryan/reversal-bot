@@ -36,11 +36,12 @@ class RiskConfig:
     max_leverage: int
     max_concurrent_positions: int
     daily_loss_limit_pct: float
-    # once a position's unrealized profit reaches this many USD, move its stop-loss to
-    # lock in profit_lock_amount_usd instead of waiting for take-profit or the original
-    # stop. 0 (default) disables this.
+    # once a position's unrealized profit reaches this many USD, start trailing its
+    # stop-loss behind the best price seen, trail_atr_mult ATRs back, instead of
+    # waiting for take-profit or the original stop. Re-evaluated every cycle and only
+    # ever tightened, never loosened. 0 (default) disables this.
     profit_lock_trigger_usd: float = 0.0
-    profit_lock_amount_usd: float = 0.0
+    trail_atr_mult: float = 1.5
     # every trade uses at least this leverage (never below it, still capped at max_leverage)
     min_leverage: int = 1
     # stop-loss is never placed further than this % away from entry, even if the
@@ -57,11 +58,8 @@ class RiskConfig:
             raise ValueError(
                 f"min_leverage ({self.min_leverage}) exceeds max_leverage ({self.max_leverage}) - refusing to start"
             )
-        if self.profit_lock_trigger_usd > 0 and self.profit_lock_amount_usd >= self.profit_lock_trigger_usd:
-            raise ValueError(
-                f"profit_lock_amount_usd ({self.profit_lock_amount_usd}) must be less than "
-                f"profit_lock_trigger_usd ({self.profit_lock_trigger_usd}) - refusing to start"
-            )
+        if self.profit_lock_trigger_usd > 0 and self.trail_atr_mult <= 0:
+            raise ValueError("trail_atr_mult must be positive when profit_lock_trigger_usd is set")
 
 
 @dataclass
