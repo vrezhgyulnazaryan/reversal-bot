@@ -71,7 +71,8 @@ risk:
 execution:
   order_type: market
   poll_interval_sec: 20
-  # place a limit order at the current best bid/ask (maker) instead of market
-  # (taker) - cheaper fees, no spread cost, at the risk of not filling at all
-  use_limit_entry: true
+  # reverted: the main (mean-reversion) strategy enters at market like it always did.
+  # order-book-based entries are meant to be their own separate approach, not a
+  # modification bolted onto this strategy's execution.
+  use_limit_entry: false
   entry_limit_timeout_sec: 90
