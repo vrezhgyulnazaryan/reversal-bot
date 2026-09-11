@@ -434,10 +434,12 @@ PAGE = """
   .page.active { display: block; }
 
   .bottomnav { display: none; }
+  .acct-toggle-mobile { display: none; }
 
   @media (max-width: 900px) {
     .sidebar { display: none; }
     main { padding: 16px 14px 84px; }
+    .acct-toggle-mobile { display: flex; margin: 0 0 14px; }
     .bottomnav {
       display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 5;
       background: rgba(10,11,16,.92); backdrop-filter: blur(10px); border-top: 1px solid var(--border);
@@ -490,6 +492,10 @@ PAGE = """
   </aside>
 
   <main>
+    <div class="acct-toggle acct-toggle-mobile">
+      <button class="acct-btn active" data-account="demo">Demo</button>
+      <button class="acct-btn" data-account="live">Live</button>
+    </div>
     <div class="notconfigured-wrap" id="notConfiguredBanner">
       <div class="notconfigured">
         <div class="ico">🔒</div>
