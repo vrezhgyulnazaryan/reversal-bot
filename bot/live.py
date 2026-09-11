@@ -154,7 +154,7 @@ class LiveTrader:
             total += float(t.get("info", {}).get("realizedPnl", 0) or 0)
         return total
 
-    def _write_status(self, now, equity, movers, note=""):
+    def _write_status(self, now, equity, movers, note="", walls=None):
         try:
             with open(STATUS_PATH, "w") as f:
                 json.dump({
@@ -162,11 +162,42 @@ class LiveTrader:
                     "equity": equity,
                     "open_positions": sorted(self.open_symbols),
                     "movers": movers,
+                    "walls": walls or [],
                     "note": note,
                     "guard_can_trade": self.guard.can_trade(),
                 }, f)
         except Exception:
             pass
+
+    def _scan_walls_for_display(self, movers: list, top_n: int = 6) -> list:
+        """Order-book walls for the top movers, purely for the dashboard to show
+        "where's the accumulation" - not tied to any specific trade signal, just a
+        general +/-5% look around current price. Capped to top_n movers since each
+        symbol costs 2 deep (wall_scan_depth) order-book fetches."""
+        if self.cfg.signal.wall_multiplier <= 0:
+            return []
+        results = []
+        for symbol, pct in movers[:top_n]:
+            try:
+                price = float(self.exchange.fetch_ticker(symbol)["last"])
+                bid_wall = find_nearest_wall(
+                    self.exchange, symbol, "bids", price, price * 0.95,
+                    self.cfg.signal.wall_multiplier, self.cfg.signal.min_wall_usd,
+                    self.cfg.signal.wall_scan_depth,
+                )
+                ask_wall = find_nearest_wall(
+                    self.exchange, symbol, "asks", price, price * 1.05,
+                    self.cfg.signal.wall_multiplier, self.cfg.signal.min_wall_usd,
+                    self.cfg.signal.wall_scan_depth,
+                )
+                if bid_wall is None and ask_wall is None:
+                    continue
+                results.append({
+                    "symbol": symbol, "price": price, "bid_wall": bid_wall, "ask_wall": ask_wall,
+                })
+            except Exception as e:
+                print(f"[warn] wall scan for display failed on {symbol}: {e}", flush=True)
+        return results
 
     def step(self):
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -203,7 +234,8 @@ class LiveTrader:
         )
         print(f"[{now}] scanned {len(movers)} movers: "
               f"{[(s, round(p, 2)) for s, p in movers[:10]]}", flush=True)
-        self._write_status(now, equity, movers)
+        walls = self._scan_walls_for_display(movers)
+        self._write_status(now, equity, movers, walls=walls)
 
         for symbol, pct in movers:
             if symbol in self.open_symbols:

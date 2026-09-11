@@ -391,6 +391,13 @@ PAGE = """
         <div class="moverlist" id="moverListFull"></div>
         <div class="empty" id="moversEmptyFull" style="display:none">__ICO_INBOX__ No data yet</div>
       </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Order-book walls</h2><span class="count">large resting orders, top movers</span></div>
+        <div class="table-wrap">
+          <table id="wallsTable"><thead><tr><th>Coin</th><th>Price</th><th>Support (bid wall)</th><th>Resistance (ask wall)</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div class="empty" id="wallsEmpty" style="display:none">__ICO_INBOX__ No significant walls detected right now</div>
+      </div>
     </section>
 
     <section id="page-history" class="page">
@@ -490,6 +497,22 @@ function renderMovers(container, movers) {
       <div class="bar-track"><div class="bar ${up ? 'up' : 'down'}" style="width:${width}%"></div></div>
       <div class="pct ${up ? 'green' : 'red'}">${up ? '+' : ''}${m[1].toFixed(1)}%</div>`;
     container.appendChild(row);
+  }
+}
+
+function renderWalls(tbody, walls) {
+  tbody.innerHTML = '';
+  for (const w of walls) {
+    const tr = document.createElement('tr');
+    const fmtWall = (wallPrice) => {
+      if (wallPrice === null || wallPrice === undefined) return '<span class="muted">-</span>';
+      const distPct = ((wallPrice - w.price) / w.price * 100);
+      const cls = distPct >= 0 ? 'green' : 'red';
+      return `${fmtNum(wallPrice)} <span class="${cls}">(${distPct >= 0 ? '+' : ''}${distPct.toFixed(1)}%)</span>`;
+    };
+    tr.innerHTML = `<td class="coin">${avatarHtml(w.symbol)}${coinName(w.symbol)}</td>` +
+      `<td>${fmtNum(w.price)}</td><td>${fmtWall(w.bid_wall)}</td><td>${fmtWall(w.ask_wall)}</td>`;
+    tbody.appendChild(tr);
   }
 }
 
@@ -711,6 +734,12 @@ async function refresh() {
   document.getElementById('moversEmptyFull').style.display = data.movers.length ? 'none' : 'block';
   document.getElementById('scanCountLabel').textContent = data.movers.length ? data.movers.length + ' coins scanned' : '';
 
+  // order-book walls
+  const walls = data.walls || [];
+  renderWalls(document.querySelector('#wallsTable tbody'), walls);
+  document.getElementById('wallsEmpty').style.display = walls.length ? 'none' : 'block';
+  document.querySelector('#wallsTable').parentElement.style.display = walls.length ? 'block' : 'none';
+
   // history: overview preview (compact, 6 rows) + full page
   const histDesc = data.history.slice().reverse();
   renderHistoryPreview(document.querySelector('#historyTablePreview tbody'), histDesc);
@@ -858,12 +887,13 @@ def api_status():
             "margin": float(p.get("info", {}).get("initialMargin") or 0),
         })
 
-    scan_time, movers = None, []
+    scan_time, movers, walls = None, [], []
     if os.path.exists(STATUS_PATH):
         with open(STATUS_PATH) as f:
             status = json.load(f)
         scan_time = status.get("time")
         movers = status.get("movers", [])
+        walls = status.get("walls", [])
 
     # entry/trail_stop events only come from the local log (no clean exchange
     # equivalent) - exits come from the exchange's own income record so they survive
@@ -875,6 +905,24 @@ def api_status():
 
     exit_rows, fees_total = fetch_exchange_closed_trades()
     history = sorted(local_rows + exit_rows, key=lambda r: r["time"])
+
+    # the exchange only tells us symbol/time/pnl for a close - side/entry/stop/tp/reason
+    # only exist in our own entry log, so stitch each exit onto the entry that opened it
+    # (walking in time order and matching by symbol) instead of leaving those blank.
+    # Only works for entries logged since this process last started - Render's disk
+    # isn't guaranteed to survive a redeploy, so older exits can still show blank.
+    pending_entry_by_symbol = {}
+    for row in history:
+        if row["event"] == "entry":
+            pending_entry_by_symbol[row["symbol"]] = row
+        elif row["event"] == "exit":
+            entry = pending_entry_by_symbol.pop(row["symbol"], None)
+            if entry:
+                row["side"] = entry.get("side", "")
+                row["entry"] = entry.get("entry", "")
+                row["stop"] = entry.get("stop", "")
+                row["take_profit"] = entry.get("take_profit", "")
+                row["reason"] = entry.get("reason", "")
 
     closed_pnls = [r["pnl"] for r in exit_rows]
     today = datetime.now(timezone.utc).date().isoformat()
@@ -905,6 +953,7 @@ def api_status():
         "positions": positions,
         "daily_pnl": daily_pnl,
         "movers": movers,
+        "walls": walls,
         "scan_time": scan_time,
         "history": history[-30:],
         "stats": stats,
