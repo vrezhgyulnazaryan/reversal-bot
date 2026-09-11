@@ -122,6 +122,22 @@ class LiveTrader:
             print(f"[adopt] now tracking pre-existing position {symbol} side={side} "
                   f"entry={entry} stop={current_stop}", flush=True)
 
+            # without this, the dashboard's history enrichment (which stitches an exit
+            # back onto the local entry that opened it) has nothing to match this
+            # position's eventual close against, and that row shows permanently blank
+            tp_order = next((o for o in algo_orders if o.get("orderType") == "TAKE_PROFIT_MARKET"), None)
+            _log_row({
+                "time": datetime.now(timezone.utc).isoformat(),
+                "event": "entry",
+                "symbol": symbol,
+                "side": side,
+                "entry": entry,
+                "stop": current_stop,
+                "take_profit": float(tp_order["triggerPrice"]) if tp_order else "",
+                "qty": qty,
+                "reason": "adopted (position pre-existing when this process started)",
+            })
+
     def _sweep_orphaned_algo_orders(self, positions: list):
         # When a position closes via one bracket order (stop or take-profit) triggering,
         # the *other* one is left sitting open (they aren't a real OCO pair on this
