@@ -29,17 +29,28 @@ def position_size(
     qty = risk_amount / stop_distance
     notional = qty * entry
 
-    required_leverage = max(1, round(notional / equity))
-    leverage = min(max(required_leverage, cfg.min_leverage), cfg.max_leverage)
+    # always keep margin_reserve_pct of total equity free, so a strong new signal
+    # always has room to enter even if earlier trades already used up margin
+    reserve = equity * (cfg.margin_reserve_pct / 100)
+    usable_margin = max(0.0, available_margin - reserve)
 
-    max_notional_by_equity = equity * cfg.max_leverage
-    # leave a small buffer below the exchange's actual free margin for fees/slippage
-    max_notional_by_margin = available_margin * leverage * 0.95
-    max_notional = min(max_notional_by_equity, max_notional_by_margin)
+    # start at the leverage floor and only step it up as far as needed to fit the
+    # intended (risk-based) position size within the margin budget - this keeps the
+    # position size (and therefore dollar risk) intact instead of shrinking it, using
+    # more cross margin only when the account actually needs the room for it
+    leverage = cfg.min_leverage
+    required_margin = notional / leverage
+    while required_margin > usable_margin * 0.95 and leverage < cfg.max_leverage:
+        leverage += 1
+        required_margin = notional / leverage
+    leverage = min(leverage, cfg.max_leverage)
+    required_margin = notional / leverage
 
-    if notional > max_notional:
-        qty = max_notional / entry
-        notional = qty * entry
+    if required_margin > usable_margin * 0.95:
+        # even max leverage doesn't fit within the reserve-respecting budget - this is
+        # the only case where the position gets downsized rather than more leveraged
+        notional = usable_margin * leverage * 0.95
+        qty = notional / entry if entry > 0 else 0.0
 
     return Sizing(qty=qty, leverage=leverage, notional=notional, risk_amount=risk_amount)
 

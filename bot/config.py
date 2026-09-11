@@ -47,6 +47,10 @@ class RiskConfig:
     # stop-loss is never placed further than this % away from entry, even if the
     # ATR-based distance would be wider (0 disables the cap)
     max_stop_pct: float = 0.0
+    # this % of total equity is always kept free (unused as margin) so a strong new
+    # signal always has room to enter - leverage is increased toward max_leverage first
+    # to make room before the position size is ever reduced
+    margin_reserve_pct: float = 15.0
 
     def __post_init__(self):
         if self.risk_per_trade_pct > self.max_risk_per_trade_pct:

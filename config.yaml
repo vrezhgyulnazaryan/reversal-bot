@@ -33,6 +33,10 @@ risk:
   min_leverage: 5
   # stop-loss is never placed further than this % away from entry (tighter is fine)
   max_stop_pct: 10.0
+  # always keep this % of equity free as margin, so a strong new signal always has
+  # room to enter - leverage is raised toward max_leverage first to make room before
+  # a position's size is ever reduced to fit
+  margin_reserve_pct: 15.0
   max_concurrent_positions: 3
   # bot stops opening new trades for the day once realized loss hits this % of starting equity
   daily_loss_limit_pct: 8.0
@@ -44,4 +48,4 @@ risk:
 
 execution:
   order_type: market
-  poll_interval_sec: 30
+  poll_interval_sec: 20

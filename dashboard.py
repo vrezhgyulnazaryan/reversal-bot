@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import threading
+from datetime import datetime, timezone
 from functools import wraps
 
 from flask import Flask, jsonify, render_template_string, request, Response
@@ -136,7 +137,7 @@ PAGE = """
   main { flex: 1; min-width: 0; padding: 24px 26px 90px; }
   h1.pagetitle { font-size: 19px; font-weight: 700; margin: 0 0 18px; letter-spacing: -.01em; }
 
-  .stats { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+  .stats { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 18px; }
   .stat {
     background: linear-gradient(180deg, var(--card), var(--bg-soft)); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 15px 17px; min-width: 0; position: relative; overflow: hidden;
@@ -271,6 +272,7 @@ PAGE = """
         <div><div class="label">Win rate</div><div class="sub" id="winRateSub">-</div></div>
       </div>
       <div class="stat"><div class="label">Realized P&amp;L</div><div class="value" id="totalPnl">-</div></div>
+      <div class="stat"><div class="label">Today</div><div class="value" id="todayPnl">-</div></div>
     </div>
 
     <section id="page-overview" class="page active">
@@ -496,6 +498,10 @@ async function refresh() {
   pnlEl.textContent = (data.stats.total_pnl >= 0 ? '+' : '') + fmtNum(data.stats.total_pnl, 2) + ' USDT';
   pnlEl.className = 'value ' + (data.stats.total_pnl >= 0 ? 'green' : 'red');
 
+  const todayEl = document.getElementById('todayPnl');
+  todayEl.textContent = (data.stats.today_pnl >= 0 ? '+' : '') + fmtNum(data.stats.today_pnl, 2) + ' USDT';
+  todayEl.className = 'value ' + (data.stats.today_pnl >= 0 ? 'green' : 'red');
+
   drawSparkline(data.history, data.equity);
 
   // positions: overview preview (top 3) + full page
@@ -540,6 +546,46 @@ def index():
     return render_template_string(PAGE)
 
 
+def fetch_exchange_closed_trades(limit=200):
+    """Realized PnL per closed trade, sourced from the exchange itself rather than the
+    local trades_log.csv. Render's free tier disk isn't guaranteed to survive a
+    redeploy, which was silently wiping the trade log and its PnL/history - the
+    exchange's own income record persists regardless of what happens to this process."""
+    try:
+        income = exchange.fapiPrivateGetIncome({"incomeType": "REALIZED_PNL", "limit": limit})
+    except Exception as e:
+        print(f"[warn] could not fetch income history: {e}", flush=True)
+        return []
+
+    income.sort(key=lambda x: int(x["time"]))
+    market_by_id = {m["id"]: m["symbol"] for m in exchange.markets.values()}
+
+    grouped = []
+    for item in income:
+        t = int(item["time"])
+        pnl = float(item["income"])
+        sid = item["symbol"]
+        # Binance can split one close into several partial-fill income entries -
+        # collapse ones for the same symbol within 5s into a single trade row
+        if grouped and grouped[-1]["symbol_id"] == sid and t - grouped[-1]["time"] < 5000:
+            grouped[-1]["pnl"] += pnl
+            grouped[-1]["time"] = t
+        else:
+            grouped.append({"symbol_id": sid, "pnl": pnl, "time": t})
+
+    rows = []
+    for g in grouped:
+        rows.append({
+            "time": datetime.fromtimestamp(g["time"] / 1000, tz=timezone.utc).isoformat(),
+            "event": "exit",
+            "symbol": market_by_id.get(g["symbol_id"], g["symbol_id"]),
+            "side": "", "entry": "", "stop": "", "take_profit": "",
+            "pnl": round(g["pnl"], 4),
+            "reason": "",
+        })
+    return rows
+
+
 @app.route("/api/status")
 @requires_auth
 def api_status():
@@ -571,16 +617,25 @@ def api_status():
         scan_time = status.get("time")
         movers = status.get("movers", [])
 
-    history = []
+    # entry/trail_stop events only come from the local log (no clean exchange
+    # equivalent) - exits come from the exchange's own income record so they survive
+    # this process restarting or Render wiping the disk on redeploy
+    local_rows = []
     if os.path.exists(LOG_PATH):
         with open(LOG_PATH, newline="") as f:
-            history = list(csv.DictReader(f))
+            local_rows = [r for r in csv.DictReader(f) if r.get("event") in ("entry", "trail_stop")]
 
-    closed_pnls = [float(r["pnl"]) for r in history if r.get("event") == "exit" and r.get("pnl")]
+    exit_rows = fetch_exchange_closed_trades()
+    history = sorted(local_rows + exit_rows, key=lambda r: r["time"])
+
+    closed_pnls = [r["pnl"] for r in exit_rows]
+    today = datetime.now(timezone.utc).date().isoformat()
+    today_pnl = sum(r["pnl"] for r in exit_rows if r["time"][:10] == today)
     stats = {
         "closed": len(closed_pnls),
         "wins": len([p for p in closed_pnls if p > 0]),
         "total_pnl": sum(closed_pnls),
+        "today_pnl": today_pnl,
     }
 
     return jsonify({
@@ -589,7 +644,7 @@ def api_status():
         "positions": positions,
         "movers": movers,
         "scan_time": scan_time,
-        "history": history[-20:],
+        "history": history[-30:],
         "stats": stats,
     })
 
