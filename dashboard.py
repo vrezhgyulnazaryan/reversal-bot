@@ -253,6 +253,28 @@ PAGE = """
   .empty { color: var(--faint); font-size: 13px; text-align: center; padding: 26px 0; }
   .empty .ico { width: 30px; height: 30px; margin: 0 auto 8px; opacity: .35; display: block; }
 
+  /* ---------- order book ladder ---------- */
+  tr.clickable { cursor: pointer; }
+  .moverrow.clickable { cursor: pointer; border-radius: 8px; }
+  .moverrow.clickable:hover, tr.clickable:hover { background: rgba(255,255,255,.03); }
+  .obladder { font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  .obmid {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 9px 0; font-size: 15px; font-weight: 750; color: var(--text);
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 2px 0;
+  }
+  .obrow { position: relative; display: flex; justify-content: space-between; padding: 4px 10px; border-radius: 5px; margin-bottom: 1px; overflow: hidden; }
+  .obrow .obbar { position: absolute; top: 0; bottom: 0; right: 0; z-index: 0; opacity: .16; }
+  .obrow.ask .obbar { background: var(--red); }
+  .obrow.bid .obbar { background: var(--green); }
+  .obrow .obprice { position: relative; z-index: 1; font-weight: 650; }
+  .obrow.ask .obprice { color: var(--red); }
+  .obrow.bid .obprice { color: var(--green); }
+  .obrow .obqty { position: relative; z-index: 1; color: var(--muted); }
+  .obrow.wall { outline: 1px solid var(--amber); background: rgba(240,185,58,.06); }
+  .obrow.wall .obqty::after { content: ' WALL'; color: var(--amber); font-weight: 700; font-size: 10px; }
+  .oblabel { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; padding: 2px 10px 4px; }
+
   .page { display: none; }
   .page.active { display: block; }
 
@@ -386,13 +408,22 @@ PAGE = """
 
     <section id="page-scan" class="page">
       <h1 class="pagetitle">Market Scan</h1>
-      <div class="panel">
-        <div class="panel-head"><h2>Coins with the biggest recent move</h2><span class="count" id="scanCountLabel"></span></div>
-        <div class="moverlist" id="moverListFull"></div>
-        <div class="empty" id="moversEmptyFull" style="display:none">__ICO_INBOX__ No data yet</div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head"><h2>Coins with the biggest recent move</h2><span class="count" id="scanCountLabel"></span></div>
+          <div class="moverlist" id="moverListFull"></div>
+          <div class="empty" id="moversEmptyFull" style="display:none">__ICO_INBOX__ No data yet</div>
+          <div class="oblabel" id="scanClickHint" style="display:none">Click a coin to open its order book &rarr;</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2 id="obTitle">Order Book</h2><span class="count" id="obSubtitle">click a coin</span></div>
+          <div class="obladder" id="obLadder">
+            <div class="empty" id="obEmpty">__ICO_INBOX__ Click a coin on the left to see its live order book</div>
+          </div>
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>Order-book walls</h2><span class="count">large resting orders, top movers</span></div>
+        <div class="panel-head"><h2>Order-book walls (summary)</h2><span class="count">large resting orders, top movers - click a row to open its ladder</span></div>
         <div class="table-wrap">
           <table id="wallsTable"><thead><tr><th>Coin</th><th>Price</th><th>Support (bid wall)</th><th>Resistance (ask wall)</th></tr></thead><tbody></tbody></table>
         </div>
@@ -489,7 +520,8 @@ function renderMovers(container, movers) {
   const maxAbs = Math.max(1, ...movers.map(m => Math.abs(m[1])));
   for (const m of movers) {
     const row = document.createElement('div');
-    row.className = 'moverrow';
+    row.className = 'moverrow clickable';
+    row.dataset.symbol = m[0];
     const up = m[1] >= 0;
     const width = Math.min(100, Math.abs(m[1]) / maxAbs * 100);
     row.innerHTML = `
@@ -504,6 +536,8 @@ function renderWalls(tbody, walls) {
   tbody.innerHTML = '';
   for (const w of walls) {
     const tr = document.createElement('tr');
+    tr.className = 'clickable';
+    tr.dataset.symbol = w.symbol;
     const fmtWall = (wallPrice) => {
       if (wallPrice === null || wallPrice === undefined) return '<span class="muted">-</span>';
       const distPct = ((wallPrice - w.price) / w.price * 100);
@@ -515,6 +549,59 @@ function renderWalls(tbody, walls) {
     tbody.appendChild(tr);
   }
 }
+
+// ---------- order-book ladder (click any coin row to open it) ----------
+let selectedObSymbol = null;
+
+function renderOrderbookLadder(data) {
+  const wrap = document.getElementById('obLadder');
+  if (!data || data.error || (!data.bids.length && !data.asks.length)) {
+    wrap.innerHTML = '<div class="empty">__ICO_INBOX__ No order book data available</div>';
+    return;
+  }
+  const allQty = [...data.bids, ...data.asks].map(l => l.qty);
+  const maxQty = Math.max(1, ...allQty);
+
+  const rowHtml = (level, side) => {
+    const w = Math.min(100, level.qty / maxQty * 100);
+    return `<div class="obrow ${side}${level.wall ? ' wall' : ''}">
+      <div class="obbar" style="width:${w}%"></div>
+      <span class="obprice">${fmtNum(level.price)}</span>
+      <span class="obqty">${fmtNum(level.qty, 2)}</span>
+    </div>`;
+  };
+
+  const asksDesc = data.asks.slice().reverse(); // highest ask at top, closest-to-mid just above mid line
+  let html = '<div class="oblabel">Asks (sell orders)</div>';
+  html += asksDesc.map(l => rowHtml(l, 'ask')).join('');
+  html += `<div class="obmid">${fmtNum(data.mid)}</div>`;
+  html += '<div class="oblabel">Bids (buy orders)</div>';
+  html += data.bids.map(l => rowHtml(l, 'bid')).join('');
+  wrap.innerHTML = html;
+}
+
+async function loadOrderbook(symbol) {
+  document.getElementById('obTitle').textContent = coinName(symbol) + ' Order Book';
+  document.getElementById('obSubtitle').textContent = 'live';
+  try {
+    const res = await fetch('/api/orderbook?symbol=' + encodeURIComponent(symbol));
+    const data = await res.json();
+    renderOrderbookLadder(data);
+  } catch (e) {
+    document.getElementById('obLadder').innerHTML = '<div class="empty">Connection error</div>';
+  }
+}
+
+function selectSymbolForOrderbook(symbol) {
+  selectedObSymbol = symbol;
+  gotoPage('scan');
+  loadOrderbook(symbol);
+}
+
+document.addEventListener('click', (e) => {
+  const row = e.target.closest('[data-symbol]');
+  if (row) selectSymbolForOrderbook(row.dataset.symbol);
+});
 
 const EVENT_ICONS = { entry: '↗', exit: '↘', trail_stop: '🔒' };
 
@@ -733,12 +820,17 @@ async function refresh() {
   document.getElementById('moversEmptyPreview').style.display = data.movers.length ? 'none' : 'block';
   document.getElementById('moversEmptyFull').style.display = data.movers.length ? 'none' : 'block';
   document.getElementById('scanCountLabel').textContent = data.movers.length ? data.movers.length + ' coins scanned' : '';
+  document.getElementById('scanClickHint').style.display = data.movers.length ? 'block' : 'none';
 
   // order-book walls
   const walls = data.walls || [];
   renderWalls(document.querySelector('#wallsTable tbody'), walls);
   document.getElementById('wallsEmpty').style.display = walls.length ? 'none' : 'block';
   document.querySelector('#wallsTable').parentElement.style.display = walls.length ? 'block' : 'none';
+
+  // live order-book ladder for whichever coin is selected (default to the top mover)
+  if (!selectedObSymbol && data.movers.length) selectedObSymbol = data.movers[0][0];
+  if (selectedObSymbol) loadOrderbook(selectedObSymbol);
 
   // history: overview preview (compact, 6 rows) + full page
   const histDesc = data.history.slice().reverse();
@@ -957,6 +1049,44 @@ def api_status():
         "scan_time": scan_time,
         "history": history[-30:],
         "stats": stats,
+    })
+
+
+@app.route("/api/orderbook")
+@requires_auth
+def api_orderbook():
+    """Live order-book ladder for one symbol - the actual price/size levels, not just
+    the wall-detection summary, so it looks and reads like a real order book."""
+    symbol = request.args.get("symbol")
+    if not symbol:
+        return jsonify({"error": "symbol required"}), 400
+    try:
+        ob = exchange.fetch_order_book(symbol, limit=100)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+    bids = ob.get("bids") or []
+    asks = ob.get("asks") or []
+
+    sample = [q for _, q in bids[:50]] + [q for _, q in asks[:50]]
+    sample_sorted = sorted(sample)
+    median_qty = sample_sorted[len(sample_sorted) // 2] if sample_sorted else 0
+    wall_mult = cfg.signal.wall_multiplier or 5.0
+    min_wall_usd = cfg.signal.min_wall_usd or 5000.0
+
+    def annotate(levels, n=18):
+        out = []
+        for price, qty in levels[:n]:
+            is_wall = median_qty > 0 and qty >= median_qty * wall_mult and qty * price >= min_wall_usd
+            out.append({"price": price, "qty": qty, "wall": is_wall})
+        return out
+
+    mid = (bids[0][0] + asks[0][0]) / 2 if bids and asks else None
+    return jsonify({
+        "symbol": symbol,
+        "mid": mid,
+        "bids": annotate(bids),
+        "asks": annotate(asks),
     })
 
 
