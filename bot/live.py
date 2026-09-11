@@ -176,7 +176,7 @@ class LiveTrader:
             total += float(t.get("info", {}).get("realizedPnl", 0) or 0)
         return total
 
-    def _write_status(self, now, equity, movers, note="", walls=None):
+    def _write_status(self, now, equity, movers, note="", walls=None, quiet_universe=None):
         try:
             with open(STATUS_PATH, "w") as f:
                 json.dump({
@@ -186,6 +186,19 @@ class LiveTrader:
                     "movers": movers,
                     "walls": walls or [],
                     "strategy_by_symbol": {s: t.get("strategy", "unknown") for s, t in self.open_trades.items()},
+                    "orderbook_scan": {
+                        "enabled": self.cfg.orderbook_strategy.enabled,
+                        "universe": quiet_universe or [],
+                        "watching": [
+                            {
+                                "symbol": s,
+                                "direction": st["direction"],
+                                "cycles": st["cycles"],
+                                "persist_cycles": self.cfg.orderbook_strategy.obi_persist_cycles,
+                            }
+                            for s, st in self.obi_state.items()
+                        ],
+                    },
                     "note": note,
                     "guard_can_trade": self.guard.can_trade(),
                 }, f)
@@ -261,7 +274,20 @@ class LiveTrader:
         print(f"[{now}] scanned {len(movers)} movers: "
               f"{[(s, round(p, 2)) for s, p in movers[:10]]}", flush=True)
         walls = self._scan_walls_for_display(movers)
-        self._write_status(now, equity, movers, walls=walls)
+
+        quiet_candidates = []
+        if self.cfg.orderbook_strategy.enabled:
+            mover_symbols = {s for s, _ in movers}
+            quiet_candidates = scan_quiet_coins(
+                self.exchange,
+                self.cfg.scan.quote_currency,
+                exclude_symbols=self.open_symbols | set(self.pending_entries) | mover_symbols,
+                top_n=self.cfg.orderbook_strategy.top_n_candidates,
+                min_quote_volume_usd=self.cfg.orderbook_strategy.min_quote_volume_usd,
+                max_abs_move_pct=self.cfg.orderbook_strategy.max_abs_move_pct,
+            )
+
+        self._write_status(now, equity, movers, walls=walls, quiet_universe=quiet_candidates)
 
         for symbol, pct in movers:
             if symbol in self.open_symbols or symbol in self.pending_entries:
@@ -278,15 +304,6 @@ class LiveTrader:
         if self.cfg.orderbook_strategy.enabled:
             occupied = len(self.open_symbols) + len(self.pending_entries)
             if occupied < self.cfg.risk.max_concurrent_positions:
-                mover_symbols = {s for s, _ in movers}
-                quiet_candidates = scan_quiet_coins(
-                    self.exchange,
-                    self.cfg.scan.quote_currency,
-                    exclude_symbols=self.open_symbols | set(self.pending_entries) | mover_symbols,
-                    top_n=self.cfg.orderbook_strategy.top_n_candidates,
-                    min_quote_volume_usd=self.cfg.orderbook_strategy.min_quote_volume_usd,
-                    max_abs_move_pct=self.cfg.orderbook_strategy.max_abs_move_pct,
-                )
                 for symbol in quiet_candidates:
                     if len(self.open_symbols) + len(self.pending_entries) >= self.cfg.risk.max_concurrent_positions:
                         break

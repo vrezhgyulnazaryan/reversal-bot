@@ -146,6 +146,7 @@ PAGE = """
   .stat {
     background: linear-gradient(180deg, var(--card), var(--bg-soft)); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 15px 17px; min-width: 0; position: relative; overflow: hidden;
+    box-shadow: 0 8px 20px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.02);
   }
   .stat .label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin-bottom: 7px; }
   .stat .value { font-size: 21px; font-weight: 700; letter-spacing: -.01em; word-break: break-word; font-variant-numeric: tabular-nums; }
@@ -207,13 +208,22 @@ PAGE = """
   .pill.exit { background: rgba(124,130,150,.15); color: var(--muted); }
   .pill.trail_stop { background: rgba(251,191,36,.12); color: var(--amber); }
   .pill.strategy { background: rgba(255,255,255,.06); color: var(--muted); font-weight: 650; }
+  .pill.strategy.ob { background: var(--gold-soft); color: var(--gold); }
 
   .avatar {
     width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-    font-size: 11.5px; font-weight: 750; color: #0b0c10;
+    font-size: 11.5px; font-weight: 750; color: #0b0c10; position: relative; overflow: hidden;
+  }
+  .avatar .avatar-img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 4px;
+    box-sizing: border-box; background: #fff;
   }
 
-  .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 18px 8px; margin-bottom: 16px; }
+  .panel {
+    background: linear-gradient(180deg, var(--card), var(--bg-soft)); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 18px 8px; margin-bottom: 16px;
+    box-shadow: 0 10px 26px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.02);
+  }
   .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   .panel-head h2 { font-size: 13.5px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 7px; }
   .panel-head h2 .ic { width: 15px; height: 15px; flex-shrink: 0; color: var(--muted); }
@@ -224,7 +234,9 @@ PAGE = """
 
   .poslist { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; }
   .posrow { display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px; padding: 10px 13px; }
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px; padding: 10px 13px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.18); transition: border-color .12s; }
+  .posrow:hover { border-color: rgba(45,212,167,.3); }
   .posrow .left { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .posrow .sym { font-weight: 700; font-size: 14px; }
   .posrow .meta { font-size: 11px; color: var(--muted); margin-top: 1px; font-variant-numeric: tabular-nums; }
@@ -248,7 +260,7 @@ PAGE = """
   tbody tr:hover { background: rgba(255,255,255,.015); }
   tbody tr:last-child td { border-bottom: none; }
   td.coin { display: flex; align-items: center; gap: 8px; font-weight: 650; border-bottom: 1px solid var(--border); }
-  td.reason { color: var(--muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+  td.reason { color: var(--muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; cursor: help; }
   td.time { color: var(--faint); font-variant-numeric: tabular-nums; }
 
   .empty { color: var(--faint); font-size: 13px; text-align: center; padding: 26px 0; }
@@ -275,6 +287,23 @@ PAGE = """
   .obrow.wall { outline: 1px solid var(--amber); background: rgba(240,185,58,.06); }
   .obrow.wall .obqty::after { content: ' WALL'; color: var(--amber); font-weight: 700; font-size: 10px; }
   .oblabel { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; padding: 2px 10px 4px; }
+
+  /* ---------- strategy-2 scanner (order-book imbalance watchlist) ---------- */
+  .obscan-desc { font-size: 12px; color: var(--muted); margin: -4px 0 12px; line-height: 1.5; }
+  .watchlist { display: flex; flex-direction: column; }
+  .universe-tags { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 12px; }
+  .universe-tags .tag { font-size: 11px; font-weight: 650; color: var(--muted); background: rgba(255,255,255,.05);
+    border: 1px solid var(--border); border-radius: 7px; padding: 4px 9px 4px 4px; display: flex; align-items: center; gap: 5px; }
+  .universe-tags .tag .avatar { width: 16px; height: 16px; font-size: 7.5px; border-radius: 5px; }
+  .watchrow { display: flex; align-items: center; gap: 10px; background: var(--bg-soft); border: 1px solid var(--border);
+    border-radius: 12px; padding: 9px 13px; margin-bottom: 8px; }
+  .watchrow .sym { font-weight: 700; font-size: 13px; width: 70px; flex-shrink: 0; }
+  .watchrow .progress-wrap { flex: 1; display: flex; align-items: center; gap: 8px; }
+  .watchrow .progress-track { flex: 1; height: 6px; border-radius: 4px; background: rgba(124,130,150,.15); overflow: hidden; }
+  .watchrow .progress-fill { height: 100%; border-radius: 4px; }
+  .watchrow .progress-fill.long { background: linear-gradient(90deg, #10b981, var(--green)); }
+  .watchrow .progress-fill.short { background: linear-gradient(90deg, #e11d48, var(--red)); }
+  .watchrow .progress-label { font-size: 11px; color: var(--faint); font-weight: 650; width: 60px; text-align: right; flex-shrink: 0; }
 
   .page { display: none; }
   .page.active { display: block; }
@@ -430,6 +459,15 @@ PAGE = """
         </div>
         <div class="empty" id="wallsEmpty" style="display:none">__ICO_INBOX__ No significant walls detected right now</div>
       </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2><span class="pill strategy ob">Strategy 2</span> Order-book scanner</h2><span class="count" id="obScanCountLabel"></span></div>
+        <div class="obscan-desc">Quiet, liquid coins that haven't made a big move — a separate universe from the movers above. Watches for a strong order-book imbalance that holds for several polls in a row before it counts as a signal.</div>
+        <div class="watchlist" id="obWatchList"></div>
+        <div class="empty" id="obWatchEmpty">__ICO_INBOX__ No imbalance building right now — scanning quietly</div>
+        <div class="oblabel">Universe being scanned</div>
+        <div class="universe-tags" id="obUniverseTags"></div>
+      </div>
     </section>
 
     <section id="page-history" class="page">
@@ -454,11 +492,12 @@ PAGE = """
 <script>
 function coinName(sym) { return (sym || '').split('/')[0]; }
 
-const STRATEGY_LABELS = { mean_reversion: 'Mean Reversion', unknown: 'Unknown' };
+const STRATEGY_LABELS = { mean_reversion: 'Mean Reversion', orderbook_imbalance: 'Order Book', unknown: 'Unknown' };
 function strategyPill(code) {
   if (!code) return '';
   const label = STRATEGY_LABELS[code] || code;
-  return `<span class="pill strategy" title="Strategy that opened this trade">${label}</span>`;
+  const cls = code === 'orderbook_imbalance' ? ' ob' : '';
+  return `<span class="pill strategy${cls}" title="Strategy that opened this trade">${label}</span>`;
 }
 
 const PALETTE = ['#6ea8fe','#a78bfa','#34d399','#fbbf24','#fb7185','#38bdf8','#f472b6','#4ade80','#fb923c','#c084fc'];
@@ -467,10 +506,15 @@ function avatarColor(sym) {
   for (let i = 0; i < sym.length; i++) h = (h * 31 + sym.charCodeAt(i)) >>> 0;
   return PALETTE[h % PALETTE.length];
 }
+// real coin logos from a public icon set, with an automatic fallback to a colored
+// letter badge underneath for anything not in that set (most of the exotic/meme
+// coins this bot actually trades won't have a real icon available)
 function avatarHtml(sym) {
   const name = coinName(sym);
   const letters = name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
-  return `<div class="avatar" style="background:${avatarColor(name)}">${letters}</div>`;
+  const iconSlug = name.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  const iconUrl = `https://cdn.jsdelivr.net/npm/cryptocurrency-icons@0.18.1/svg/color/${iconSlug}.svg`;
+  return `<div class="avatar" style="background:${avatarColor(name)}">${letters}<img class="avatar-img" src="${iconUrl}" alt="" onerror="this.remove()"></div>`;
 }
 
 function fmtNum(v, maxDp) {
@@ -628,9 +672,32 @@ function renderHistoryFull(tbody, rows) {
       <td>${fmtNum(h.stop)}</td>
       <td>${fmtNum(h.take_profit)}</td>
       <td class="${pnlClass}">${pnlText}</td>
-      <td class="reason">${strategyPill(h.strategy)} ${h.reason || '-'}</td>`;
+      <td class="reason" title="${(h.reason || '').replace(/"/g, '&quot;')}">${strategyPill(h.strategy)} ${h.reason || '-'}</td>`;
     tbody.appendChild(tr);
   }
+}
+
+function renderObWatchlist(container, emptyEl, watching, universeContainer, universe, countLabel) {
+  container.innerHTML = '';
+  for (const w of watching) {
+    const row = document.createElement('div');
+    row.className = 'watchrow';
+    const pct = Math.min(100, (w.cycles / w.persist_cycles) * 100);
+    row.innerHTML = `
+      ${avatarHtml(w.symbol)}
+      <div class="sym">${coinName(w.symbol)}</div>
+      <span class="pill ${w.direction}">${w.direction.toUpperCase()}</span>
+      <div class="progress-wrap">
+        <div class="progress-track"><div class="progress-fill ${w.direction}" style="width:${pct}%"></div></div>
+        <div class="progress-label">${w.cycles}/${w.persist_cycles} cycles</div>
+      </div>`;
+    container.appendChild(row);
+  }
+  emptyEl.style.display = watching.length ? 'none' : 'block';
+
+  universeContainer.innerHTML = universe.slice(0, 30).map(s => `<span class="tag">${avatarHtml(s)}${coinName(s)}</span>`).join('')
+    || '<span class="tag muted">scanning...</span>';
+  countLabel.textContent = universe.length ? universe.length + ' coins scanned' : '';
 }
 
 function renderHistoryPreview(tbody, rows) {
@@ -836,6 +903,14 @@ async function refresh() {
   document.getElementById('wallsEmpty').style.display = walls.length ? 'none' : 'block';
   document.querySelector('#wallsTable').parentElement.style.display = walls.length ? 'block' : 'none';
 
+  // strategy 2 (order-book imbalance) scanner visibility
+  const obScan = data.orderbook_scan || { universe: [], watching: [] };
+  renderObWatchlist(
+    document.getElementById('obWatchList'), document.getElementById('obWatchEmpty'),
+    obScan.watching || [], document.getElementById('obUniverseTags'), obScan.universe || [],
+    document.getElementById('obScanCountLabel')
+  );
+
   // live order-book ladder for whichever coin is selected (default to the top mover)
   if (!selectedObSymbol && data.movers.length) selectedObSymbol = data.movers[0][0];
   if (selectedObSymbol) loadOrderbook(selectedObSymbol);
@@ -988,6 +1063,7 @@ def api_status():
         })
 
     scan_time, movers, walls, strategy_by_symbol = None, [], [], {}
+    orderbook_scan = {"enabled": False, "universe": [], "watching": []}
     if os.path.exists(STATUS_PATH):
         with open(STATUS_PATH) as f:
             status = json.load(f)
@@ -995,6 +1071,7 @@ def api_status():
         movers = status.get("movers", [])
         walls = status.get("walls", [])
         strategy_by_symbol = status.get("strategy_by_symbol", {})
+        orderbook_scan = status.get("orderbook_scan", orderbook_scan)
 
     for p in positions:
         p["strategy"] = strategy_by_symbol.get(p["symbol"], "unknown")
@@ -1059,6 +1136,7 @@ def api_status():
         "daily_pnl": daily_pnl,
         "movers": movers,
         "walls": walls,
+        "orderbook_scan": orderbook_scan,
         "scan_time": scan_time,
         "history": history[-30:],
         "stats": stats,
