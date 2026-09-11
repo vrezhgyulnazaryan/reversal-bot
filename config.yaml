@@ -71,3 +71,7 @@ risk:
 execution:
   order_type: market
   poll_interval_sec: 20
+  # place a limit order at the current best bid/ask (maker) instead of market
+  # (taker) - cheaper fees, no spread cost, at the risk of not filling at all
+  use_limit_entry: true
+  entry_limit_timeout_sec: 90

@@ -1,4 +1,5 @@
 import csv
+import dataclasses
 import json
 import os
 import time
@@ -15,7 +16,7 @@ LOG_PATH = "trades_log.csv"
 STATUS_PATH = "status.json"
 LOG_FIELDS = [
     "time", "event", "symbol", "side", "entry", "stop", "take_profit",
-    "qty", "leverage", "reason", "order_id", "exit_price", "pnl",
+    "qty", "leverage", "reason", "order_id", "exit_price", "pnl", "strategy",
 ]
 
 
@@ -39,6 +40,7 @@ class LiveTrader:
         self.guard = DailyLossGuard(equity, cfg.risk.daily_loss_limit_pct)
         self.open_symbols = set()
         self.open_trades = {}  # symbol -> dict(entry metadata) for trades this bot opened
+        self.pending_entries = {}  # symbol -> dict(unfilled limit entry order state)
         print(f"[init] mode={'TESTNET' if cfg.testnet else 'LIVE'} equity={equity:.2f} USDT", flush=True)
 
     def _equity(self) -> float:
@@ -118,6 +120,7 @@ class LiveTrader:
                 "stop_algo_id": stop_algo_id,
                 "current_stop": current_stop,
                 "trailing_active": False,
+                "strategy": "mean_reversion",
             }
             print(f"[adopt] now tracking pre-existing position {symbol} side={side} "
                   f"entry={entry} stop={current_stop}", flush=True)
@@ -136,6 +139,7 @@ class LiveTrader:
                 "take_profit": float(tp_order["triggerPrice"]) if tp_order else "",
                 "qty": qty,
                 "reason": "adopted (position pre-existing when this process started)",
+                "strategy": "mean_reversion",
             })
 
     def _sweep_orphaned_algo_orders(self, positions: list):
@@ -179,6 +183,7 @@ class LiveTrader:
                     "open_positions": sorted(self.open_symbols),
                     "movers": movers,
                     "walls": walls or [],
+                    "strategy_by_symbol": {s: t.get("strategy", "unknown") for s, t in self.open_trades.items()},
                     "note": note,
                     "guard_can_trade": self.guard.can_trade(),
                 }, f)
@@ -233,11 +238,14 @@ class LiveTrader:
 
         self._adopt_untracked_positions(positions)
         self._sweep_orphaned_algo_orders(positions)
+        self._check_pending_entries()
 
         self._check_trailing_stops(positions)
 
-        if len(self.open_symbols) >= self.cfg.risk.max_concurrent_positions:
-            print(f"[{now}] max concurrent positions reached, skipping scan", flush=True)
+        occupied = len(self.open_symbols) + len(self.pending_entries)
+        if occupied >= self.cfg.risk.max_concurrent_positions:
+            print(f"[{now}] max concurrent positions reached "
+                  f"({len(self.open_symbols)} open + {len(self.pending_entries)} pending), skipping scan", flush=True)
             self._write_status(now, equity, [], "max concurrent positions reached")
             return
 
@@ -254,9 +262,9 @@ class LiveTrader:
         self._write_status(now, equity, movers, walls=walls)
 
         for symbol, pct in movers:
-            if symbol in self.open_symbols:
+            if symbol in self.open_symbols or symbol in self.pending_entries:
                 continue
-            if len(self.open_symbols) >= self.cfg.risk.max_concurrent_positions:
+            if len(self.open_symbols) + len(self.pending_entries) >= self.cfg.risk.max_concurrent_positions:
                 break
             try:
                 self._evaluate_symbol(symbol)
@@ -453,7 +461,7 @@ class LiveTrader:
 
         print(f"[wall] {symbol} refined stop {sig.stop:.6f} -> {new_stop:.6f} "
               f"using order-book wall at {wall_price:.6f}", flush=True)
-        return Signal(sig.side, sig.entry, new_stop, sig.take_profit, sig.reason + " + wall-refined stop")
+        return dataclasses.replace(sig, stop=new_stop, reason=sig.reason + " + wall-refined stop")
 
     def _evaluate_symbol(self, symbol: str):
         df = fetch_ohlcv_df(self.exchange, symbol, self.cfg.timeframe, self.cfg.lookback_bars)
@@ -492,18 +500,38 @@ class LiveTrader:
             pass  # already cross, or exchange doesn't allow changing it mid-position - harmless either way
         self.exchange.set_leverage(sizing.leverage, symbol)
         side = "buy" if sig.side == "long" else "sell"
-        opposite = "sell" if sig.side == "long" else "buy"
+
+        if self.cfg.execution.use_limit_entry:
+            ob = self.exchange.fetch_order_book(symbol, limit=5)
+            book_side = ob["bids"] if sig.side == "long" else ob["asks"]
+            limit_price = book_side[0][0] if book_side else sig.entry
+            entry_order = self.exchange.create_order(
+                symbol, "limit", side, sizing.qty,
+                price=self.exchange.price_to_precision(symbol, limit_price),
+                params={"timeInForce": "GTC"},
+            )
+            self.pending_entries[symbol] = {
+                "order_id": entry_order["id"], "sig": sig, "sizing": sizing, "placed_at": time.time(),
+            }
+            print(f"[signal] {symbol} {sig.side} LIMIT entry placed at {limit_price:.6f} "
+                  f"(qty={sizing.qty:.6f}) - maker order, waiting for fill", flush=True)
+            return
 
         entry_order = self.exchange.create_order(symbol, self.cfg.execution.order_type, side, sizing.qty)
+        self._finalize_entry(symbol, sig, sizing, sizing.qty, entry_order)
 
+    def _finalize_entry(self, symbol: str, sig: Signal, sizing, filled_qty: float, entry_order: dict):
+        """Places the protective bracket and starts tracking the position - shared by
+        both the market-order path and a filled/timed-out limit entry."""
+        opposite = "sell" if sig.side == "long" else "buy"
         try:
-            stop_algo_id = self._place_reduce_only_stop(symbol, opposite, sizing.qty, "STOP_MARKET", sig.stop)
-            self._place_reduce_only_stop(symbol, opposite, sizing.qty, "TAKE_PROFIT_MARKET", sig.take_profit)
+            stop_algo_id = self._place_reduce_only_stop(symbol, opposite, filled_qty, "STOP_MARKET", sig.stop)
+            self._place_reduce_only_stop(symbol, opposite, filled_qty, "TAKE_PROFIT_MARKET", sig.take_profit)
         except Exception as e:
             # the position is now open with no protective orders - closing it immediately
             # is safer than leaving it unguarded until the next poll cycle
             print(f"[error] bracket order placement failed for {symbol}, closing position: {e}", flush=True)
-            self.exchange.create_order(symbol, "market", opposite, sizing.qty, params={"reduceOnly": True})
+            self.exchange.create_order(symbol, "market", opposite, filled_qty, params={"reduceOnly": True})
             return
 
         self.open_symbols.add(symbol)
@@ -512,10 +540,11 @@ class LiveTrader:
             "entry_time": entry_time,
             "side": sig.side,
             "entry": sig.entry,
-            "qty": sizing.qty,
+            "qty": filled_qty,
             "stop_algo_id": stop_algo_id,
             "current_stop": sig.stop,
             "trailing_active": False,
+            "strategy": sig.strategy,
         }
         _log_row({
             "time": datetime.now(timezone.utc).isoformat(),
@@ -525,11 +554,45 @@ class LiveTrader:
             "entry": sig.entry,
             "stop": sig.stop,
             "take_profit": sig.take_profit,
-            "qty": sizing.qty,
+            "qty": filled_qty,
             "leverage": sizing.leverage,
             "reason": sig.reason,
             "order_id": entry_order.get("id"),
+            "strategy": sig.strategy,
         })
+
+    def _check_pending_entries(self):
+        """Follow up on limit entries placed by _evaluate_symbol: finalize on fill,
+        cancel (protecting any partial fill) once entry_limit_timeout_sec elapses."""
+        for symbol in list(self.pending_entries.keys()):
+            pend = self.pending_entries[symbol]
+            try:
+                order = self.exchange.fetch_order(pend["order_id"], symbol)
+            except Exception as e:
+                print(f"[warn] could not check pending entry for {symbol}: {e}", flush=True)
+                continue
+
+            filled = float(order.get("filled") or 0)
+            elapsed = time.time() - pend["placed_at"]
+
+            if order.get("status") == "closed" and filled > 0:
+                del self.pending_entries[symbol]
+                self._finalize_entry(symbol, pend["sig"], pend["sizing"], filled, order)
+                continue
+
+            if elapsed > self.cfg.execution.entry_limit_timeout_sec:
+                try:
+                    self.exchange.cancel_order(pend["order_id"], symbol)
+                except Exception as e:
+                    print(f"[warn] could not cancel timed-out entry for {symbol}: {e}", flush=True)
+                del self.pending_entries[symbol]
+                if filled > 0:
+                    print(f"[signal] {symbol} limit entry partially filled ({filled}) before timeout, "
+                          f"protecting the filled portion", flush=True)
+                    self._finalize_entry(symbol, pend["sig"], pend["sizing"], filled, order)
+                else:
+                    print(f"[signal] {symbol} limit entry timed out unfilled after {elapsed:.0f}s, cancelled",
+                          flush=True)
 
     def run_forever(self):
         while True:

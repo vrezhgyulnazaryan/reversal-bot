@@ -13,6 +13,7 @@ class Signal:
     stop: float
     take_profit: float
     reason: str
+    strategy: str = "mean_reversion"
 
 
 def _levels(

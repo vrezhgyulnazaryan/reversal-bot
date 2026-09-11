@@ -94,6 +94,11 @@ class RiskConfig:
 class ExecutionConfig:
     order_type: str
     poll_interval_sec: int
+    # place a limit order at the current best bid/ask instead of a market order - a
+    # maker fill is often cheaper (lower/no taker fee) and avoids paying the spread.
+    # Needs a fill-timeout since a limit order can simply never fill.
+    use_limit_entry: bool = False
+    entry_limit_timeout_sec: int = 90
 
 
 @dataclass

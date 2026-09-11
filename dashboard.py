@@ -206,6 +206,7 @@ PAGE = """
   .pill.entry { background: var(--accent-soft); color: var(--accent); }
   .pill.exit { background: rgba(124,130,150,.15); color: var(--muted); }
   .pill.trail_stop { background: rgba(251,191,36,.12); color: var(--amber); }
+  .pill.strategy { background: rgba(255,255,255,.06); color: var(--muted); font-weight: 650; }
 
   .avatar {
     width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
@@ -453,6 +454,13 @@ PAGE = """
 <script>
 function coinName(sym) { return (sym || '').split('/')[0]; }
 
+const STRATEGY_LABELS = { mean_reversion: 'Mean Reversion', unknown: 'Unknown' };
+function strategyPill(code) {
+  if (!code) return '';
+  const label = STRATEGY_LABELS[code] || code;
+  return `<span class="pill strategy" title="Strategy that opened this trade">${label}</span>`;
+}
+
 const PALETTE = ['#6ea8fe','#a78bfa','#34d399','#fbbf24','#fb7185','#38bdf8','#f472b6','#4ade80','#fb923c','#c084fc'];
 function avatarColor(sym) {
   let h = 0;
@@ -506,7 +514,7 @@ function renderPositions(container, positions) {
       <div class="left">
         ${avatarHtml(p.symbol)}
         <div>
-          <div class="sym">${coinName(p.symbol)} <span class="pill ${p.side || ''}" style="margin-left:4px">${(p.side || '?').toUpperCase()}</span></div>
+          <div class="sym">${coinName(p.symbol)} <span class="pill ${p.side || ''}" style="margin-left:4px">${(p.side || '?').toUpperCase()}</span> ${strategyPill(p.strategy)}</div>
           <div class="meta">${fmtNum(p.qty, 2)} @ ${fmtNum(p.entry)}</div>
         </div>
       </div>
@@ -620,7 +628,7 @@ function renderHistoryFull(tbody, rows) {
       <td>${fmtNum(h.stop)}</td>
       <td>${fmtNum(h.take_profit)}</td>
       <td class="${pnlClass}">${pnlText}</td>
-      <td class="reason">${h.reason || '-'}</td>`;
+      <td class="reason">${strategyPill(h.strategy)} ${h.reason || '-'}</td>`;
     tbody.appendChild(tr);
   }
 }
@@ -979,13 +987,17 @@ def api_status():
             "margin": float(p.get("info", {}).get("initialMargin") or 0),
         })
 
-    scan_time, movers, walls = None, [], []
+    scan_time, movers, walls, strategy_by_symbol = None, [], [], {}
     if os.path.exists(STATUS_PATH):
         with open(STATUS_PATH) as f:
             status = json.load(f)
         scan_time = status.get("time")
         movers = status.get("movers", [])
         walls = status.get("walls", [])
+        strategy_by_symbol = status.get("strategy_by_symbol", {})
+
+    for p in positions:
+        p["strategy"] = strategy_by_symbol.get(p["symbol"], "unknown")
 
     # entry/trail_stop events only come from the local log (no clean exchange
     # equivalent) - exits come from the exchange's own income record so they survive
@@ -1015,6 +1027,7 @@ def api_status():
                 row["stop"] = entry.get("stop", "")
                 row["take_profit"] = entry.get("take_profit", "")
                 row["reason"] = entry.get("reason", "")
+                row["strategy"] = entry.get("strategy", "")
 
     closed_pnls = [r["pnl"] for r in exit_rows]
     today = datetime.now(timezone.utc).date().isoformat()
