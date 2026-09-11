@@ -11,15 +11,21 @@ def fetch_ohlcv_df(exchange: ccxt.Exchange, symbol: str, timeframe: str, limit: 
 
 def scan_movers(
     exchange: ccxt.Exchange, quote_currency: str, top_n: int, min_abs_move_pct: float,
-    min_quote_volume_usd: float = 0.0,
+    min_quote_volume_usd: float = 0.0, always_include: frozenset = frozenset(),
 ):
     """Rank USDT-M perpetual symbols by absolute 24h % change.
 
     Uses the exchange's 24h ticker stats as a cheap proxy for "moved a lot recently" -
     good enough for a screener, not a precise window match.
+
+    always_include bypasses the min_abs_move_pct filter for specific symbols (e.g.
+    BTC/ETH) that are structurally unlikely to ever clear a 5% 24h-move bar but can
+    still have a perfectly good intraday setup worth checking - without this, large
+    low-relative-volatility coins are silently excluded from the scanner entirely.
     """
     tickers = exchange.fetch_tickers()
     candidates = []
+    always = {}
     for symbol, t in tickers.items():
         market = exchange.markets.get(symbol)
         if not market or not market.get("swap") or market.get("quote") != quote_currency:
@@ -29,10 +35,17 @@ def scan_movers(
         pct = t.get("percentage")
         if pct is None:
             continue
+        if symbol in always_include:
+            always[symbol] = pct
         if abs(pct) >= min_abs_move_pct:
             candidates.append((symbol, pct))
     candidates.sort(key=lambda x: abs(x[1]), reverse=True)
-    return candidates[:top_n]
+    result = candidates[:top_n]
+    have = {s for s, _ in result}
+    for symbol, pct in always.items():
+        if symbol not in have:
+            result.append((symbol, pct))
+    return result
 
 
 def scan_quiet_coins(

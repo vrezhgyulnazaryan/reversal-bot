@@ -1,6 +1,6 @@
 import os
 import yaml
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,6 +15,10 @@ class ScanConfig:
     # skip symbols with less than this much 24h quote volume - avoids the thinnest,
     # most easily-manipulated listings. 0 disables the filter.
     min_quote_volume_usd: float = 0.0
+    # these always get evaluated by the scanner regardless of the 24h-move filter
+    # above - large coins like BTC/ETH rarely move 5%+ in 24h so they'd otherwise
+    # never be looked at, even with a perfectly good intraday setup
+    always_scan_symbols: list = field(default_factory=list)
 
 
 @dataclass

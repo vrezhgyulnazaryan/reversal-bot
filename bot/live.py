@@ -270,6 +270,7 @@ class LiveTrader:
             self.cfg.scan.top_n_movers,
             self.cfg.scan.min_abs_move_pct,
             self.cfg.scan.min_quote_volume_usd,
+            always_include=frozenset(self.cfg.scan.always_scan_symbols),
         )
         print(f"[{now}] scanned {len(movers)} movers: "
               f"{[(s, round(p, 2)) for s, p in movers[:10]]}", flush=True)

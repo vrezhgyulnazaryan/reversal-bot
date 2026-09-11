@@ -14,6 +14,13 @@ scan:
   # showing billions in 24h volume) so this threshold is a best-guess for real markets,
   # not something validated against our demo data.
   min_quote_volume_usd: 20000000
+  # always scanned by strategy 1 regardless of the 24h-move filter above - these
+  # rarely clear a 5% move but can still have a perfectly good intraday setup
+  always_scan_symbols:
+    - BTC/USDT:USDT
+    - ETH/USDT:USDT
+    - BNB/USDT:USDT
+    - SOL/USDT:USDT
 
 signal:
   rsi_period: 14
